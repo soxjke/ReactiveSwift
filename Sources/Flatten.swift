@@ -293,44 +293,42 @@ extension Signal where Value: SignalProducerConvertible, Error == Value.Error {
 			let relayDisposable = CompositeDisposable()
 
 			disposable += relayDisposable
-			disposable += self.observeConcurrent(relayObserver, limit, relayDisposable)
+			disposable += self.observeConcurrent(relayObserver, limit, Lifetime(relayDisposable))
 
 			return disposable
 		}
 	}
 
-	fileprivate func observeConcurrent(_ observer: Signal<Value.Value, Error>.Observer, _ limit: UInt, _ disposable: CompositeDisposable) -> Disposable? {
+	fileprivate func observeConcurrent(_ observer: Signal<Value.Value, Error>.Observer, _ limit: UInt, _ lifetime: Lifetime) -> Disposable? {
 		let state = Atomic(ConcurrentFlattenState<Value.Value, Error>(limit: limit))
 
 		func startNextIfNeeded() {
-			while let producer = state.modify({ $0.dequeue() }) {
+			while !lifetime.hasEnded, let producer = state.modify({ $0.dequeue() }) {
 				let producerState = UnsafeAtomicState<ProducerState>(.starting)
 				let deinitializer = ScopedDisposable(AnyDisposable(producerState.deinitialize))
 
-				producer.startWithSignal { signal, inner in
-					let handle = disposable.add(inner)
+				let handle = SerialDisposable()
 
-					signal.observe { event in
-						switch event {
-						case .completed, .interrupted:
-							handle?.dispose()
+				handle.inner = lifetime += producer.start { event in
+					switch event {
+					case .completed, .interrupted:
+						handle.dispose()
 
-							let shouldComplete: Bool = state.modify { state in
-								state.activeCount -= 1
-								return state.shouldComplete
-							}
-
-							withExtendedLifetime(deinitializer) {
-								if shouldComplete {
-									observer.sendCompleted()
-								} else if producerState.is(.started) {
-									startNextIfNeeded()
-								}
-							}
-
-						case .value, .failed:
-							observer.send(event)
+						let shouldComplete: Bool = state.modify { state in
+							state.activeCount -= 1
+							return state.shouldComplete
 						}
+
+						withExtendedLifetime(deinitializer) {
+							if shouldComplete {
+								observer.sendCompleted()
+							} else if producerState.is(.started) {
+								startNextIfNeeded()
+							}
+						}
+
+					case .value, .failed:
+						observer.send(event)
 					}
 				}
 
@@ -373,10 +371,10 @@ extension SignalProducer where Value: SignalProducerConvertible, Error == Value.
 		return SignalProducer<Value.Value, Error> { relayObserver, lifetime in
 			self.startWithSignal { signal, signalDisposable in
 				let disposables = CompositeDisposable()
-				lifetime.observeEnded(signalDisposable.dispose)
-				lifetime.observeEnded(disposables.dispose)
+				lifetime += disposables
+				lifetime += signalDisposable
 
-				_ = signal.observeConcurrent(relayObserver, limit, disposables)
+				_ = signal.observeConcurrent(relayObserver, limit, Lifetime(disposables))
 			}
 		}
 	}
@@ -550,50 +548,48 @@ extension Signal where Value: SignalProducerConvertible, Error == Value.Error {
 		return self.observe { event in
 			switch event {
 			case let .value(p):
-				p.producer.startWithSignal { innerSignal, innerDisposable in
-					state.modify {
-						// When we replace the disposable below, this prevents
-						// the generated Interrupted event from doing any work.
-						$0.replacingInnerSignal = true
-					}
+				state.modify {
+					// When we replace the disposable below, this prevents
+					// the generated Interrupted event from doing any work.
+					$0.replacingInnerSignal = true
+				}
 
-					latestInnerDisposable.inner = innerDisposable
+				latestInnerDisposable.inner = nil
 
-					state.modify {
-						$0.replacingInnerSignal = false
-						$0.innerSignalComplete = false
-					}
+				state.modify {
+					$0.replacingInnerSignal = false
+					$0.innerSignalComplete = false
+				}
 
-					innerSignal.observe { event in
-						switch event {
-						case .interrupted:
-							// If interruption occurred as a result of a new
-							// producer arriving, we don't want to notify our
-							// observer.
-							let shouldComplete: Bool = state.modify { state in
-								if !state.replacingInnerSignal {
-									state.innerSignalComplete = true
-								}
-								return !state.replacingInnerSignal && state.outerSignalComplete
+				latestInnerDisposable.inner = p.producer.start { event in
+					switch event {
+					case .interrupted:
+						// If interruption occurred as a result of a new
+						// producer arriving, we don't want to notify our
+						// observer.
+						let shouldComplete: Bool = state.modify { state in
+							if !state.replacingInnerSignal {
+								state.innerSignalComplete = true
 							}
-
-							if shouldComplete {
-								observer.sendCompleted()
-							}
-
-						case .completed:
-							let shouldComplete: Bool = state.modify {
-								$0.innerSignalComplete = true
-								return $0.outerSignalComplete
-							}
-
-							if shouldComplete {
-								observer.sendCompleted()
-							}
-
-						case .value, .failed:
-							observer.send(event)
+							return !state.replacingInnerSignal && state.outerSignalComplete
 						}
+
+						if shouldComplete {
+							observer.sendCompleted()
+						}
+
+					case .completed:
+						let shouldComplete: Bool = state.modify {
+							$0.innerSignalComplete = true
+							return $0.outerSignalComplete
+						}
+
+						if shouldComplete {
+							observer.sendCompleted()
+						}
+
+					case .value, .failed:
+						observer.send(event)
 					}
 				}
 
@@ -674,54 +670,52 @@ extension Signal where Value: SignalProducerConvertible, Error == Value.Error {
 
 		return self.observe { event in
 			switch event {
-			case let .value(innerProducer):
+			case let .value(p):
 				// Ignore consecutive `innerProducer`s if any `innerSignal` already sent an event.
 				guard !relayDisposable.isDisposed else {
 					return
 				}
 
-				innerProducer.producer.startWithSignal { innerSignal, innerDisposable in
-					state.modify {
-						$0.innerSignalComplete = false
+				state.modify {
+					$0.innerSignalComplete = false
+				}
+
+				let handle = SerialDisposable()
+				var isWinningSignal = false
+
+				handle.inner = relayDisposable += p.producer.start { event in
+					if !isWinningSignal {
+						isWinningSignal = state.modify { state in
+							guard !state.isActivated else {
+								return false
+							}
+
+							state.isActivated = true
+							return true
+						}
+
+						// Ignore non-winning signals.
+						guard isWinningSignal else { return }
+
+						// The disposals would be run exactly once immediately after
+						// the winning signal flips `state.isActivated`.
+						handle.dispose()
+						relayDisposable.dispose()
 					}
 
-					let disposableHandle = relayDisposable.add(innerDisposable)
-					var isWinningSignal = false
-
-					innerSignal.observe { event in
-						if !isWinningSignal {
-							isWinningSignal = state.modify { state in
-								guard !state.isActivated else {
-									return false
-								}
-
-								state.isActivated = true
-								return true
-							}
-
-							// Ignore non-winning signals.
-							guard isWinningSignal else { return }
-
-							// The disposals would be run exactly once immediately after
-							// the winning signal flips `state.isActivated`.
-							disposableHandle?.dispose()
-							relayDisposable.dispose()
+					switch event {
+					case .completed:
+						let shouldComplete: Bool = state.modify { state in
+							state.innerSignalComplete = true
+							return state.outerSignalComplete
 						}
 
-						switch event {
-						case .completed:
-							let shouldComplete: Bool = state.modify { state in
-								state.innerSignalComplete = true
-								return state.outerSignalComplete
-							}
-
-							if shouldComplete {
-								observer.sendCompleted()
-							}
-
-						case .value, .failed, .interrupted:
-							observer.send(event)
+						if shouldComplete {
+							observer.sendCompleted()
 						}
+
+					case .value, .failed, .interrupted:
+						observer.send(event)
 					}
 				}
 
@@ -756,14 +750,11 @@ extension SignalProducer where Value: SignalProducerConvertible, Error == Value.
 	fileprivate func race() -> SignalProducer<Value.Value, Error> {
 		return SignalProducer<Value.Value, Error> { observer, lifetime in
 			let relayDisposable = CompositeDisposable()
-			lifetime.observeEnded(relayDisposable.dispose)
+			lifetime += relayDisposable
 
 			self.startWithSignal { signal, signalDisposable in
-				lifetime.observeEnded(signalDisposable.dispose)
-
-				if let disposable = signal.observeRace(observer, relayDisposable) {
-					lifetime.observeEnded(disposable.dispose)
-				}
+				lifetime += signalDisposable
+				lifetime += signal.observeRace(observer, relayDisposable)
 			}
 		}
 	}
@@ -916,10 +907,8 @@ extension Signal {
 			case let .value(value):
 				observer.send(value: value)
 			case let .failed(error):
-				handler(error).startWithSignal { signal, disposable in
-					serialDisposable.inner = disposable
-					signal.observe(observer)
-				}
+				serialDisposable.dispose()
+				handler(error).start(observer)
 			case .completed:
 				observer.sendCompleted()
 			case .interrupted:
@@ -939,7 +928,7 @@ extension SignalProducer {
 	public func flatMapError<F>(_ transform: @escaping (Error) -> SignalProducer<Value, F>) -> SignalProducer<Value, F> {
 		return SignalProducer<Value, F> { observer, lifetime in
 			let serialDisposable = SerialDisposable()
-			lifetime.observeEnded(serialDisposable.dispose)
+			lifetime += serialDisposable
 
 			self.startWithSignal { signal, signalDisposable in
 				serialDisposable.inner = signalDisposable
