@@ -1,5 +1,7 @@
 import Result
 
+private typealias _Result = Result
+
 /// A mutable property that validates mutations before committing them.
 ///
 /// If the property wraps an arbitrary mutable property, changes originated from
@@ -43,10 +45,25 @@ public final class ValidatingProperty<Value, ValidationError: Swift.Error>: Muta
 		/// The Validator mode supports `coerced` decisions, but only one rule can be
 		/// specified.
 		case validator((Value) -> Decision)
+
+		var rules: [RuleGroup: [Rule]]? {
+			switch self {
+			case let .rules(rules):
+				return rules
+			case .validator:
+				return nil
+			}
+		}
+	}
+
+	private enum SetterInput {
+		case full(Value)
+		case partial((Value) -> Value)
+		case keyPathUpdate(PartialKeyPath<Value>, (Value) -> Value, Failure?)
 	}
 
 	private let getter: () -> Value
-	private let setter: (Value) -> Void
+	private let setter: (SetterInput) -> Void
 	private let mode: Mode
 
 	/// The result of the last attempted edit of the root property.
@@ -58,7 +75,7 @@ public final class ValidatingProperty<Value, ValidationError: Swift.Error>: Muta
 	/// latest validation result.
 	public var value: Value {
 		get { return getter() }
-		set { setter(newValue) }
+		set { setter(.full(newValue)) }
 	}
 
 	/// A producer for Signals that will send the property's current value,
@@ -115,16 +132,41 @@ public final class ValidatingProperty<Value, ValidationError: Swift.Error>: Muta
 			return (Property(capturing: mutableResult), { input in
 				// Acquire the lock of `inner` to ensure no modification happens until
 				// the validation logic here completes.
-				inner.withValue { _ in
+				inner.withValue { value in
+					func writeback(_ value: Value) {
+						isSettingInnerValue = true
+						inner.value = value
+						isSettingInnerValue = false
+					}
+
+					let realInput: Value
+
+					switch input {
+					case let .full(value):
+						realInput = value
+					case let .partial(modifier):
+						realInput = modifier(value)
+					case let .keyPathUpdate(keyPath, modifier, errors):
+						realInput = modifier(value)
+
+						mutableResult.modify { result in
+							result = result.updating(keyPath, value: realInput, errors: errors)
+						}
+
+						if errors == nil {
+							writeback(realInput)
+						}
+
+						return
+					}
+
 					let writebackValue: Value? = mutableResult.modify { result in
-						result = validate(input)
+						result = validate(realInput)
 						return result.value
 					}
 
 					if let value = writebackValue {
-						isSettingInnerValue = true
-						inner.value = value
-						isSettingInnerValue = false
+						writeback(value)
 					}
 				}
 			})
@@ -337,15 +379,23 @@ public final class ValidatingProperty<Value, ValidationError: Swift.Error>: Muta
 				}
 			}
 	}
-/*
+
 	public subscript<U>(keyPath: WritableKeyPath<Value, U>) -> BindingTarget<U> {
 		return BindingTarget(on: UIScheduler(), lifetime: lifetime) { [weak self] value in
 			guard let strongSelf = self else { return }
-			guard let validations = strongSelf.validationGroups[keyPath] else {
-				fatalError("`EditingProperty` does not support writing to unregistered key paths in Swift 4.0. Register a validation rule with this key path with the `EditingProperty` initialiser.")
+			guard let validations = strongSelf.mode.rules?[RuleGroup(keyPath: keyPath)] else {
+				// Perform a full validation if the key path is not found.
+				strongSelf.setter(.partial { current in
+					var new = current
+					new[keyPath: keyPath] = value
+					return new
+				})
+				return
 			}
 
-			let errors = validations.flatMap { $0.validate(value) }
+			let errors = validations.flatMap { rule in
+				(value)
+			}
 
 			strongSelf.store.modify { store in
 				store.errors[keyPath] = errors.isEmpty ? nil : errors
@@ -356,9 +406,9 @@ public final class ValidatingProperty<Value, ValidationError: Swift.Error>: Muta
 			}
 		}
 	}
-*/
+
 	public struct Failure: Error {
-		public let errors: [ValidationError]
+		private let errors: [RuleGroup: [ValidationError]]
 	}
 
 	public struct Rule {
@@ -468,20 +518,22 @@ public final class ValidatingProperty<Value, ValidationError: Swift.Error>: Muta
 			case let .coerced(replacement, error):
 				self = .coerced(replacement: replacement,
 								proposed: proposedValue,
-								error: Failure(errors: error.map { [$0] } ?? []))
+								error: Failure(errors: [RuleGroup(): [error]]))
 			case let .invalid(error):
-				self = .invalid(proposedValue, Failure(errors: [error]))
+				self = .invalid(proposedValue, Failure(errors: [RuleGroup(): [error]]))
 			}
 		}
 
 		/// Construct the result from a validation decision dictionary.
 		fileprivate init(_ proposedValue: Value, _ decisions: [RuleGroup: [BinaryDecision]]) {
-			let decisions = decisions.flatMap { $0.value }
-
-			let errors = decisions.flatMap { decision -> ValidationError? in
-				guard case let .invalid(error) = decision else { return nil }
-				return error
-			}
+			let errors = Dictionary(uniqueKeysWithValues: decisions
+				.mapValues { decisions -> [ValidationError] in
+					return decisions.flatMap { decision in
+						guard case let .invalid(error) = decision else { return nil }
+						return error
+					}
+				}
+				.filter { !$0.value.isEmpty })
 
 			guard errors.isEmpty else {
 				self = .valid(proposedValue)
@@ -489,6 +541,17 @@ public final class ValidatingProperty<Value, ValidationError: Swift.Error>: Muta
 			}
 
 			self = .invalid(proposedValue, Failure(errors: errors))
+		}
+
+		/// Construct a new result by updating the given key path.
+		fileprivate func updating(_ keyPath: PartialKeyPath<Value>, value: Value, errors: Failure?) -> Result {
+			switch (self, errors) {
+			case (.valid, .none):
+				return .valid(value)
+			case (.coerced, _):
+				fatalError()
+				case let (.invalid(_, oldFailure))
+			}
 		}
 	}
 }
