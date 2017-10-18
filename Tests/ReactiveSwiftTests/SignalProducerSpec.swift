@@ -724,6 +724,19 @@ class SignalProducerSpec: QuickSpec {
 
 					expect(result?.value) == [1, 4, 9, 16]
 				}
+
+				it("should dispose of the upstream when lifted downstream signals are disposed of") {
+					var counter = 0
+
+					let results = SignalProducer<Int, NoError>(0 ..< 10)
+						.on(value: { _ in counter += 1 })
+						.lift { $0.take(first: 5).collect() }
+						.single()?
+						.value
+
+					expect(results) == [0, 1, 2, 3, 4]
+					expect(counter) == 5
+				}
 			}
 
 			describe("over binary operators") {

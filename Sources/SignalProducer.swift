@@ -221,11 +221,18 @@ public struct SignalProducer<Value, Error: Swift.Error> {
 	@discardableResult
 	public func startWithSignal<Result>(_ setup: (_ signal: Signal<Value, Error>, _ interruptHandle: Disposable) -> Result) -> Result {
 		let instance = core.makeInstance()
-		let result = setup(instance.signal, instance.interruptHandle)
-		if !instance.interruptHandle.isDisposed {
-			instance.observerDidSetup()
+		let signal = instance.signal.on(disposed: instance.interruptHandle.dispose)
+
+		// `withExtendedLifetime` is applied to prevent the composed signal from being
+		// deinitialised right after having returned from `setup`. Such deinitialization
+		// would breaks the `started` events in boundary cases.
+		return withExtendedLifetime(signal) {
+			let result = setup(signal, instance.interruptHandle)
+			if !instance.interruptHandle.isDisposed {
+				instance.observerDidSetup()
+			}
+			return result
 		}
-		return result
 	}
 }
 
