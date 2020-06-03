@@ -15,7 +15,7 @@ The following are a few important differences, along with their rationales.
 ### Signals and SignalProducers (“hot” and “cold” observables)
 
 One of the most confusing aspects of Rx is that of [“hot”, “cold”, and “warm”
-                                                    observables](http://www.introtorx.com/content/v1.0.10621.0/14_HotAndColdObservables.html) (event streams).
+                                                    observables](http://introtorx.com/Content/v1.0.10621.0/14_HotAndColdObservables.html) (event streams).
 
 In short, given just a method or function declaration like this, in C#:
 
@@ -47,7 +47,7 @@ the kind of error must be specified in the type system. For example,
 `Signal<Int, AnyError>` is a signal of integer values that may fail with an error
 of type `AnyError`.
 
-More importantly, RAC allows the special type `NoError` to be used instead,
+More importantly, RAC allows the special type `Never` to be used instead,
 which _statically guarantees_ that an event stream is not allowed to send a
 failure. **This eliminates many bugs caused by unexpected failure events.**
 

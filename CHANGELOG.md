@@ -1,7 +1,148 @@
 # master
 *Please add new entries at the top.*
 
-# 3.0.0-alpha.1
+1. Fix a debug assertion in `Lock.try()` that could be raised in earlier OS versions (< iOS 10.0, < macOS 10.12). (#747, #788)
+
+   Specifically, ReactiveSwift now recognizes `EDEADLK` as expected error code from `pthread_mutex_trylock` alongside `0`, `EBUSY` and `EAGAIN`.
+
+# 6.3.0
+1. `Property` and `MutableProperty` can now be used as property wrapper. Note that they remain a reference type container, so it may not be appropriate to use them in types requiring value semantics. (#781)
+   ```swift
+   class ViewModel {
+     @MutableProperty var count: Int = 0
+
+     func subscribe() {
+       self.$count.producer.startWithValues {
+         print("`count` has changed to \(count)")
+       }
+     }
+
+     func increment() {
+       print("count prior to increment: \(count)")
+       self.$count.modify { $0 += 1 }
+     }
+   }
+   ```
+
+1. When `combineLatest` or `zip` over a sequence of `SignalProducer`s or `Property`s, you can now specify an optional `emptySentinel` parameter, which would be used when the sequence is empty.
+
+   This becomes relevant, when the sequence of producers is calculated from some other Signal and the signal resulting from the joined producers is observed. If no value is sent when the sequence is empty, the observer gets terminated silently, and, e.g., the UI would not be updated.
+
+  (#774, kudos to @rocketnik)
+
+# 6.2.1
+
+1. Improved performance of joining signals by a factor of around 5. This enables joining of 1000 and more signals in a reasonable amount of time.
+1. Fixed `SignalProducer.debounce` operator that, when started more than once, would not deliver values on producers started after the first time. (#772, kudos to @gpambrozio)
+1. `FlattenStrategy.throttle` is introduced. (#713, kudos to @inamiy)
+1. Updated `README.md` to reflect Swift 5.1 compatibility and point snippets to 6.1.0 (#763, kudos to @Marcocanc)
+1. Update travis to Xcode 11.1 and Swift 5.1 (#764, kudos @petrpavlik)
+1. [SwiftPM] Add platforms (#761, kudos to @ikesyo)
+1. Renamed `filterMap` to `compactMap` and deprecated `filterMap` (#746, kudos to @Marcocanc)
+
+# 6.1.0
+
+1. add possibility to use `all` and `any` operators with array of arguments (#735, kudos to @olejnjak)
+   ```swift
+   let property = Property.any([boolProperty1, boolProperty2, boolProperty3])
+   ```
+1. Fixed Result extensions ambiguity (#733, kudos to @nekrich)
+1. Add `<~` binding operator to `Signal.Observer` (#635, kudos to @Marcocanc)
+
+# 6.0.0
+
+1. Dropped support for Swift 4.2 (Xcode 9)
+2. Removed dependency on https://github.com/antitypical/Result (#702, kudos to @NachoSoto and @mdiep)
+
+**Upgrade to 6.0.0**
+
+* If you have used `Result` only as dependency of `ReactiveSwift`, remove all instances of `import Result`, `import enum Result.NoError` or `import struct Result.AnyError` and remove the `Result` Framework from your project.
+* Replace all cases where `NoError` was used in a `Signal` or `SignalProducer` with `Never`
+* Replace all cases where `AnyError` was used in a `Signal` or `SignalProducer` with `Swift.Error`
+
+# 5.0.1
+
+1. Fix warnings in Xcode 10.2
+
+# 5.0.0
+
+1. Support Swift 5.0 (Xcode 10.2) (#711, kudos to @ikesyo)
+1. Dropped support for Swift 4.1 (Xcode 9)
+1. Migrated from `hashValue` to `hash(into:)`, fixing deprecation warning in Swift 5 (#707, kudos to @ChristopherRogers)
+1. New operator `materializeResults` and `dematerializeResults` (#679, kudos to @ra1028)
+1. New convenience initializer for `Action` that takes a `ValidatingProperty` as its state (#637, kudos to @Marcocanc)
+1. Fix legacy date implementation. (#683, kudos to @shoheiyokoyama)
+1. New operator `scanMap`. (#695, kudos to @inamiy)
+
+# 4.0.0
+
+1. When unfair locks from libplatform are unavailable, ReactiveSwift now fallbacks to error checking Pthread mutexes instead of the default. Mitigations regarding issues with `pthread_mutex_trylock` have also been applied. (#654, kudos to @andersio)
+1. Fix some documentation errors about Carthage usage (#655)
+1. [CocoaPods] CocoaPods 1.4.0 is the minimum required version. (#651, kudos to @ikesyo)
+1. `<~` bindings now works with optional left-hand-side operands. (#642, kudos to @andersio and @Ankit-Aggarwal)
+
+   ```swift
+   let nilTarget: BindingTarget<Int>? = nil
+
+   // This is now a valid binding. Previously required manual
+   // unwrapping in ReactiveSwift 3.x.
+   nilTarget <~ notifications.map { $0.count }
+   ```
+
+# 4.0.0-rc.2
+
+1. Support Swift 4.2 (Xcode 10) (#644, kudos to @ikesyo) 
+
+# 4.0.0-rc.1
+
+1. `Lifetime` may now be manually ended using `Lifetime.Token.dispose()`, in addition to the existing when-token-deinitializes semantic. (#641, kudos to @andersio) 
+1. For Swift 4.1 and above, `BindingSource` conformances are required to have `Error` parameterized as exactly `NoError`. As a result, `Signal` and `SignalProducer` are now conditionally `BindingSource`. (#590, kudos to @NachoSoto and @andersio)
+1. For Swift 4.1 and above, `Signal.Event` and `ActionError` are now conditionally `Equatable`. (#590, kudos to @NachoSoto and @andersio)
+1. New method `collect(every:on:skipEmpty:discardWhenCompleted:)` which delivers all values that occurred during a time interval (#619, kudos to @Qata)
+1. `debounce` now offers an opt-in behaviour to preserve the pending value when the signal or producer completes. You may enable it by specifying `discardWhenCompleted` as false (#287, kudos to @Qata)
+1. Result now interoperates with SignalProducer n-ary operators as a constant producer (#606, kudos to @Qata)
+1. New property operator: `filter` (#586, kudos to @iv-mexx)
+1. New operator `merge(with:)` (#600, kudos to @ra1028)
+1. New operator `map(value:)` (#601, kudos to @ra1028)
+1. `SignalProducer.merge(with:)`, `SignalProducer.concat`, `SignalProducer.prefix`, `SignalProducer.then`, `SignalProducer.and`, `SignalProducer.or`, `SignalProducer.zip(with:)`, `SignalProducer.sample(with:)`, `SignalProducer.sample(on:)`, `SignalProducer.take(until:)`, `SignalProducer.take(untilReplacement:)`, `SignalProducer.skip(until:)`, `SignalProducer.flatMap`, `SignalProducer.flatMapError`, `SignalProducer.combineLatest(with:)`, `Signal.flatMap`, `Signal.flatMapError`, `Signal.withLatest(from:)` and `Property.init(initial:then:)` now accept `SignalProducerConvertible` conforming types (#610, #611, kudos to @1028)
+1. Bag can be created with the initial elements now (#609, kudos to @ra1028)
+1. Non-class types now can be conforms to ReactiveExtensionProvider (#636, kudos to @ra1028)
+
+# 3.1.0
+1. Fixed `schedule(after:interval:leeway:)` being cancelled when the returned `Disposable` is not retained. (#584, kudos to @jjoelson)
+
+# 3.1.0-rc.1
+1. Fixed a scenario of downstream interruptions being dropped. (#577, kudos to @andersio)
+
+   Manual interruption of time shifted producers, including `delay`, `observe(on:)`, `throttle`, `debounce` and `lazyMap`, should discard outstanding events at best effort ASAP.
+
+   But in ReactiveSwift 2.0 to 3.0, the manual interruption is ignored if the upstream producer has terminated. For example:
+
+   ```swift
+   // Completed upstream + `delay`.
+   SignalProducer.empty
+       .delay(10.0, on: QueueScheduler.main)
+       .startWithCompleted { print("Value should have been discarded!") }
+       .dispose()
+
+   // Console(t+10): Value should have been discarded!
+   ```
+
+   The expected behavior has now been restored.
+
+   Please note that, since ReactiveSwift 2.0, while the interruption is handled immediately, the `interrupted` event delivery is not synchronous — it generally respects the closest asynchronous operator applied, and delivers on that scheduler.
+
+1. `SignalProducer.concat` now has an overload that accepts an error. (#564, kudos to @nmccann)
+
+1. Fix some documentation errors (#560, kudos to @ikesyo)
+
+# 3.0.0
+1. Code Coverage is reenabled. (#553)
+   For Carthage users, version 0.26.0 and later is required for building App Store compatible binaries.
+
+# 3.0.0-rc.1
+1. Fixed integer overflow for `DispatchTimeInterval` in FoundationExtensions.swift (#506)
+
 # 3.0.0-alpha.1
 1. `Signal` now uses `Lifetime` for resource management. (#404, kudos to @andersio)
 
@@ -36,7 +177,6 @@
 
 1. New method ``retry(upTo:interval:on:)``. This delays retrying on failure by `interval` until hitting the `upTo` limitation.
 
-# 2.0.0
 # 2.0.0-rc.3
 1. `Lifetime.+=` which ties a `Disposable` to a `Lifetime`, is now part of the public API and is no longer deprecated.
 

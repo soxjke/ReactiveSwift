@@ -8,7 +8,6 @@
 
 import Foundation
 import Dispatch
-import Result
 import Nimble
 import Quick
 @testable import ReactiveSwift
@@ -43,7 +42,7 @@ class FoundationExtensionsSpec: QuickSpec {
 			}
 
 			it("should be disposed of if it is not reachable and no observer is attached") {
-				weak var signal: Signal<Notification, NoError>?
+				weak var signal: Signal<Notification, Never>?
 				var isDisposed = false
 
 				let disposable: Disposable? = {
@@ -64,7 +63,7 @@ class FoundationExtensionsSpec: QuickSpec {
 			}
 
 			it("should be not disposed of if it still has one or more active observers") {
-				weak var signal: Signal<Notification, NoError>?
+				weak var signal: Signal<Notification, Never>?
 				var isDisposed = false
 
 				let disposable: Disposable? = {
@@ -93,6 +92,13 @@ class FoundationExtensionsSpec: QuickSpec {
 
 				expect((DispatchTimeInterval.seconds(5) * 0.5).timeInterval).to(beCloseTo(DispatchTimeInterval.milliseconds(2500).timeInterval))
 				expect((DispatchTimeInterval.seconds(1) * 0.25).timeInterval).to(beCloseTo(DispatchTimeInterval.milliseconds(250).timeInterval))
+			}
+			
+			it("should not introduce integer overflow upon scale") {
+				expect((DispatchTimeInterval.seconds(Int.max) * 0.01).timeInterval).to(beCloseTo(10 * DispatchTimeInterval.milliseconds(Int.max).timeInterval, within: 1))
+				expect((DispatchTimeInterval.milliseconds(Int.max) * 0.01).timeInterval).to(beCloseTo(10 * DispatchTimeInterval.microseconds(Int.max).timeInterval, within: 1))
+				expect((DispatchTimeInterval.microseconds(Int.max) * 0.01).timeInterval).to(beCloseTo(10 * DispatchTimeInterval.nanoseconds(Int.max).timeInterval, within: 1))
+				expect((DispatchTimeInterval.seconds(Int.max) * 10).timeInterval) == Double.infinity
 			}
 
 			it("should produce the expected TimeInterval values") {

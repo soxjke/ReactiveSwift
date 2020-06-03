@@ -9,10 +9,9 @@
 import Dispatch
 import Foundation
 
-import Result
 import Nimble
 import Quick
-import ReactiveSwift
+@testable import ReactiveSwift
 
 class SignalProducerSpec: QuickSpec {
 	override func spec() {
@@ -33,8 +32,9 @@ class SignalProducerSpec: QuickSpec {
 
 			it("should not release signal observers when given disposable is disposed") {
 				var lifetime: Lifetime!
+				_ = lifetime
 
-				let producer = SignalProducer<Int, NoError> { observer, innerLifetime in
+				let producer = SignalProducer<Int, Never> { observer, innerLifetime in
 					lifetime = innerLifetime
 
 					innerLifetime.observeEnded {
@@ -63,10 +63,10 @@ class SignalProducerSpec: QuickSpec {
 
 			it("should dispose of added disposables upon completion") {
 				let addedDisposable = AnyDisposable()
-				var observer: Signal<(), NoError>.Observer!
+				var observer: Signal<(), Never>.Observer!
 
-				let producer = SignalProducer<(), NoError> { incomingObserver, lifetime in
-					lifetime.observeEnded(addedDisposable.dispose)
+				let producer = SignalProducer<(), Never> { incomingObserver, lifetime in
+					lifetime += addedDisposable
 					observer = incomingObserver
 				}
 
@@ -82,7 +82,7 @@ class SignalProducerSpec: QuickSpec {
 				var observer: Signal<(), TestError>.Observer!
 
 				let producer = SignalProducer<(), TestError> { incomingObserver, lifetime in
-					lifetime.observeEnded(addedDisposable.dispose)
+					lifetime += addedDisposable
 					observer = incomingObserver
 				}
 
@@ -95,10 +95,10 @@ class SignalProducerSpec: QuickSpec {
 
 			it("should dispose of added disposables upon interruption") {
 				let addedDisposable = AnyDisposable()
-				var observer: Signal<(), NoError>.Observer!
+				var observer: Signal<(), Never>.Observer!
 
-				let producer = SignalProducer<(), NoError> { incomingObserver, lifetime in
-					lifetime.observeEnded(addedDisposable.dispose)
+				let producer = SignalProducer<(), Never> { incomingObserver, lifetime in
+					lifetime += addedDisposable
 					observer = incomingObserver
 				}
 
@@ -113,7 +113,7 @@ class SignalProducerSpec: QuickSpec {
 				let addedDisposable = AnyDisposable()
 
 				let producer = SignalProducer<(), TestError> { _, lifetime in
-					lifetime.observeEnded(addedDisposable.dispose)
+					lifetime += addedDisposable
 					return
 				}
 
@@ -124,25 +124,82 @@ class SignalProducerSpec: QuickSpec {
 				expect(addedDisposable.isDisposed) == true
 			}
 
-			it("should deliver the interrupted event with respect to the applied asynchronous operators") {
+			it("should deliver the interrupted event with respect to the asynchronous operator applied to an alive upstream with a signal product") {
 				let scheduler = TestScheduler()
-				var signalInterrupted = false
-				var observerInterrupted = false
+				var isInterrupted = false
 
-				let (signal, _) = Signal<Int, NoError>.pipe()
+				let (signal, _) = Signal<Int, Never>.pipe()
 
-				SignalProducer(signal)
+				let disposable = SignalProducer(signal)
 					.observe(on: scheduler)
-					.on(interrupted: { signalInterrupted = true })
-					.startWithInterrupted { observerInterrupted = true }
-					.dispose()
+					.startWithSignal { signal, disposable -> Disposable in
+						signal.observeInterrupted {
+							isInterrupted = true
+						}
+						return disposable
+					}
 
-				expect(signalInterrupted) == false
-				expect(observerInterrupted) == false
+				disposable.dispose()
+				expect(isInterrupted) == false
 
 				scheduler.run()
-				expect(signalInterrupted) == true
-				expect(observerInterrupted) == true
+				expect(isInterrupted) == true
+			}
+
+			it("should deliver the interrupted event with respect to the asynchronous operator applied to a terminated upstream with a signal product") {
+				let scheduler = TestScheduler()
+				var isInterrupted = false
+
+				let disposable: Disposable = SignalProducer<Int, Never>.empty
+					.observe(on: scheduler)
+					.startWithSignal { signal, disposable in
+						signal.observeInterrupted {
+							isInterrupted = true
+						}
+						return disposable
+					}
+
+				disposable.dispose()
+				expect(isInterrupted) == false
+
+				scheduler.run()
+				expect(isInterrupted) == true
+			}
+
+			it("should deliver the interrupted event with respect to the asynchronous operator applied to an alive upstream with a direct observation") {
+				let scheduler = TestScheduler()
+				var isInterrupted = false
+
+				let (signal, _) = Signal<Int, Never>.pipe()
+
+				let disposable = SignalProducer(signal)
+					.observe(on: scheduler)
+					.startWithInterrupted {
+						isInterrupted = true
+					}
+
+				disposable.dispose()
+				expect(isInterrupted) == false
+
+				scheduler.run()
+				expect(isInterrupted) == true
+			}
+
+			it("should deliver the interrupted event with respect to the asynchronous operator applied to a terminated upstream with a direct observation") {
+				let scheduler = TestScheduler()
+				var isInterrupted = false
+
+				let disposable = SignalProducer<Int, Never>.empty
+					.observe(on: scheduler)
+					.startWithInterrupted {
+						isInterrupted = true
+					}
+
+				disposable.dispose()
+				expect(isInterrupted) == false
+
+				scheduler.run()
+				expect(isInterrupted) == true
 			}
 		}
 
@@ -225,19 +282,19 @@ class SignalProducerSpec: QuickSpec {
 			it("should be inferred and overloaded without ambiguity") {
 				let action: () -> String = { "" }
 				let throwableAction: () throws -> String = { "" }
-				let resultAction1: () -> Result<String, NoError> = { .success("") }
-				let resultAction2: () -> Result<String, AnyError> = { .success("") }
-				let throwableResultAction: () throws -> Result<String, NoError> = { .success("") }
+				let resultAction1: () -> Result<String, Never> = { .success("") }
+				let resultAction2: () -> Result<String, Error> = { .success("") }
+				let throwableResultAction: () throws -> Result<String, Never> = { .success("") }
 
-				expect(type(of: SignalProducer(action))) == SignalProducer<String, AnyError>.self
-				expect(type(of: SignalProducer<String, NoError>(action))) == SignalProducer<String, NoError>.self
+				expect(type(of: SignalProducer(action))) == SignalProducer<String, Error>.self
+				expect(type(of: SignalProducer<String, Never>(action))) == SignalProducer<String, Never>.self
 				expect(type(of: SignalProducer<String, TestError>(action))) == SignalProducer<String, TestError>.self
 
-				expect(type(of: SignalProducer(resultAction1))) == SignalProducer<String, NoError>.self
-				expect(type(of: SignalProducer(resultAction2))) == SignalProducer<String, AnyError>.self
+				expect(type(of: SignalProducer(resultAction1))) == SignalProducer<String, Never>.self
+				expect(type(of: SignalProducer(resultAction2))) == SignalProducer<String, Error>.self
 
-				expect(type(of: SignalProducer(throwableAction))) == SignalProducer<String, AnyError>.self
-				expect(type(of: SignalProducer(throwableResultAction))) == SignalProducer<Result<String, NoError>, AnyError>.self
+				expect(type(of: SignalProducer(throwableAction))) == SignalProducer<String, Error>.self
+				expect(type(of: SignalProducer(throwableResultAction))) == SignalProducer<Result<String, Never>, Error>.self
 			}
 		}
 
@@ -249,7 +306,7 @@ class SignalProducerSpec: QuickSpec {
 					return "🎃"
 				}
 
-				let lazyProducer = SignalProducer<String, NoError>(lazyGetter)
+				let lazyProducer = SignalProducer<String, Never>(lazyGetter)
 
 				expect(evaluated).to(beFalse())
 
@@ -346,7 +403,7 @@ class SignalProducerSpec: QuickSpec {
 
 		describe("trailing closure") {
 			it("receives next values") {
-				let (producer, observer) = SignalProducer<Int, NoError>.pipe()
+				let (producer, observer) = SignalProducer<Int, Never>.pipe()
 
 				var values = [Int]()
 				producer.startWithValues { value in
@@ -400,7 +457,7 @@ class SignalProducerSpec: QuickSpec {
 			it("should send a successful value then complete") {
 				let operationReturnValue = "OperationValue"
 
-				let signalProducer = SignalProducer<String, AnyError> { () throws -> String in
+				let signalProducer = SignalProducer<String, Error> { () throws -> String in
 					operationReturnValue
 				}
 
@@ -415,15 +472,59 @@ class SignalProducerSpec: QuickSpec {
 			it("should send the error") {
 				let operationError = TestError.default
 
-				let signalProducer = SignalProducer<String, AnyError> { () throws -> String in
+				let signalProducer = SignalProducer<String, Error> { () throws -> String in
 					throw operationError
 				}
 
 				var error: TestError?
 				signalProducer.startWithFailed {
-					error = $0.error as? TestError
+					error = $0 as? TestError
 				}
 
+				expect(error) == operationError
+			}
+		}
+		
+		describe("Result.producer") {
+			it("should send a successful value then complete") {
+				let operationReturnValue = "OperationValue"
+				
+				let signalProducer = SignalProducer<String, Error>(Result.success(operationReturnValue))
+				
+				var value: String?
+				var error: Error?
+				var completed = false
+				signalProducer
+					.on(failed: {
+						error = $0
+					}, completed: {
+						completed = true
+					}, value: {
+						value = $0
+					})
+					.start()
+				
+				expect(value) == operationReturnValue
+				expect(error).to(beNil())
+				expect(completed).to(beTrue())
+			}
+			
+			it("should send the error") {
+				let operationError = TestError.default
+				
+				let signalProducer = SignalProducer<String, TestError>(Result.failure(operationError))
+				
+				var value: String?
+				var error: TestError?
+				signalProducer
+					.on(failed: {
+						error = $0
+					}, value: {
+						value = $0
+					})
+					.start()
+				
+				expect(value).to(beNil())
 				expect(error) == operationError
 			}
 		}
@@ -433,7 +534,7 @@ class SignalProducerSpec: QuickSpec {
 				var started = false
 				var value: Int?
 
-				SignalProducer<Int, NoError>(value: 42)
+				SignalProducer<Int, Never>(value: 42)
 					.on(started: {
 						started = true
 					}, value: {
@@ -452,8 +553,8 @@ class SignalProducerSpec: QuickSpec {
 				let addedDisposable = AnyDisposable()
 				var disposable: Disposable!
 
-				let producer = SignalProducer<Int, NoError> { _, lifetime in
-					lifetime.observeEnded(addedDisposable.dispose)
+				let producer = SignalProducer<Int, Never> { _, lifetime in
+					lifetime += addedDisposable
 					return
 				}
 
@@ -472,7 +573,7 @@ class SignalProducerSpec: QuickSpec {
 				var interrupted = false
 				var disposable: Disposable!
 
-				SignalProducer<Int, NoError>(value: 42)
+				SignalProducer<Int, Never>(value: 42)
 					.start(on: TestScheduler())
 					.startWithSignal { signal, innerDisposable in
 						signal.observeInterrupted {
@@ -492,7 +593,7 @@ class SignalProducerSpec: QuickSpec {
 				weak var objectRetainedByObserver: NSObject?
 				var disposable: Disposable!
 
-				let producer = SignalProducer<Int, NoError>.never
+				let producer = SignalProducer<Int, Never>.never
 				producer.startWithSignal { signal, innerDisposable in
 					let object = NSObject()
 					objectRetainedByObserver = object
@@ -510,7 +611,7 @@ class SignalProducerSpec: QuickSpec {
 				var started = false
 				var value: Int?
 
-				SignalProducer<Int, NoError>(value: 42)
+				SignalProducer<Int, Never>(value: 42)
 					.on(started: {
 						started = true
 					}, value: {
@@ -530,7 +631,7 @@ class SignalProducerSpec: QuickSpec {
 			it("should send interrupted if disposed before closure return") {
 				var interrupted = false
 
-				SignalProducer<Int, NoError>(value: 42)
+				SignalProducer<Int, Never>(value: 42)
 					.startWithSignal { signal, disposable in
 						expect(interrupted) == false
 
@@ -549,7 +650,7 @@ class SignalProducerSpec: QuickSpec {
 				var observer: Signal<Int, TestError>.Observer!
 
 				let producer = SignalProducer<Int, TestError> { incomingObserver, lifetime in
-					lifetime.observeEnded(addedDisposable.dispose)
+					lifetime += addedDisposable
 					observer = incomingObserver
 				}
 
@@ -565,7 +666,7 @@ class SignalProducerSpec: QuickSpec {
 				var observer: Signal<Int, TestError>.Observer!
 
 				let producer = SignalProducer<Int, TestError> { incomingObserver, lifetime in
-					lifetime.observeEnded(addedDisposable.dispose)
+					lifetime += addedDisposable
 					observer = incomingObserver
 				}
 
@@ -580,7 +681,7 @@ class SignalProducerSpec: QuickSpec {
 				let addedDisposable = AnyDisposable()
 
 				let producer = SignalProducer<Int, TestError> { _, lifetime in
-					lifetime.observeEnded(addedDisposable.dispose)
+					lifetime += addedDisposable
 				}
 
 				var started = false
@@ -596,14 +697,14 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("should return whatever value is returned by the setup closure") {
-				let producer = SignalProducer<Never, NoError>.empty
+				let producer = SignalProducer<Never, Never>.empty
 				expect(producer.startWithSignal { _, _ in "Hello" }) == "Hello"
 			}
 
 			it("should dispose of the upstream when the downstream producer terminates") {
 				var iterationCount = 0
 
-				let loop = SignalProducer<Int, NoError> { observer, lifetime in
+				let loop = SignalProducer<Int, Never> { observer, lifetime in
 					for i in 0 ..< 100 where !lifetime.hasEnded {
 						observer.send(value: i)
 						iterationCount += 1
@@ -627,7 +728,7 @@ class SignalProducerSpec: QuickSpec {
 
 		describe("start") {
 			it("should immediately begin sending events") {
-				let producer = SignalProducer<Int, NoError>([1, 2])
+				let producer = SignalProducer<Int, Never>([1, 2])
 
 				var values: [Int] = []
 				var completed = false
@@ -647,7 +748,7 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("should send interrupted if disposed") {
-				let producer = SignalProducer<(), NoError>.never
+				let producer = SignalProducer<(), Never>.never
 
 				var interrupted = false
 				let disposable = producer.startWithInterrupted {
@@ -664,7 +765,7 @@ class SignalProducerSpec: QuickSpec {
 				weak var objectRetainedByObserver: NSObject?
 				var disposable: Disposable!
 				let test = {
-					let producer = SignalProducer<Int, NoError>.never
+					let producer = SignalProducer<Int, Never>.never
 					let object = NSObject()
 					objectRetainedByObserver = object
 					disposable = producer.startWithValues { _ in _ = object }
@@ -679,7 +780,7 @@ class SignalProducerSpec: QuickSpec {
 
 			describe("trailing closure") {
 				it("receives next values") {
-					let (producer, observer) = SignalProducer<Int, NoError>.pipe()
+					let (producer, observer) = SignalProducer<Int, Never>.pipe()
 
 					var values = [Int]()
 					producer.startWithValues { value in
@@ -720,10 +821,10 @@ class SignalProducerSpec: QuickSpec {
 		describe("lift") {
 			describe("over unary operators") {
 				it("should invoke transformation once per started signal") {
-					let baseProducer = SignalProducer<Int, NoError>([1, 2])
+					let baseProducer = SignalProducer<Int, Never>([1, 2])
 
 					var counter = 0
-					let transform = { (signal: Signal<Int, NoError>) -> Signal<Int, NoError> in
+					let transform = { (signal: Signal<Int, Never>) -> Signal<Int, Never> in
 						counter += 1
 						return signal
 					}
@@ -739,7 +840,7 @@ class SignalProducerSpec: QuickSpec {
 				}
 
 				it("should not miss any events") {
-					let baseProducer = SignalProducer<Int, NoError>([1, 2, 3, 4])
+					let baseProducer = SignalProducer<Int, Never>([1, 2, 3, 4])
 
 					let producer = baseProducer.lift { signal in
 						return signal.map { $0 * $0 }
@@ -752,11 +853,11 @@ class SignalProducerSpec: QuickSpec {
 
 			describe("over binary operators") {
 				it("should invoke transformation once per started signal") {
-					let baseProducer = SignalProducer<Int, NoError>([1, 2])
-					let otherProducer = SignalProducer<Int, NoError>([3, 4])
+					let baseProducer = SignalProducer<Int, Never>([1, 2])
+					let otherProducer = SignalProducer<Int, Never>([3, 4])
 
 					var counter = 0
-					let transform = { (signal: Signal<Int, NoError>) -> (Signal<Int, NoError>) -> Signal<(Int, Int), NoError> in
+					let transform = { (signal: Signal<Int, Never>) -> (Signal<Int, Never>) -> Signal<(Int, Int), Never> in
 						return { otherSignal in
 							counter += 1
 							return Signal.zip(signal, otherSignal)
@@ -774,10 +875,10 @@ class SignalProducerSpec: QuickSpec {
 				}
 
 				it("should not miss any events") {
-					let baseProducer = SignalProducer<Int, NoError>([1, 2, 3])
-					let otherProducer = SignalProducer<Int, NoError>([4, 5, 6])
+					let baseProducer = SignalProducer<Int, Never>([1, 2, 3])
+					let otherProducer = SignalProducer<Int, Never>([4, 5, 6])
 
-					let transform = { (signal: Signal<Int, NoError>) -> (Signal<Int, NoError>) -> Signal<Int, NoError> in
+					let transform = { (signal: Signal<Int, Never>) -> (Signal<Int, Never>) -> Signal<Int, Never> in
 						return { otherSignal in
 							return Signal.zip(signal, otherSignal).map { $0.0 + $0.1 }
 						}
@@ -792,11 +893,11 @@ class SignalProducerSpec: QuickSpec {
 
 			describe("over binary operators with signal") {
 				it("should invoke transformation once per started signal") {
-					let baseProducer = SignalProducer<Int, NoError>([1, 2])
-					let (otherSignal, otherSignalObserver) = Signal<Int, NoError>.pipe()
+					let baseProducer = SignalProducer<Int, Never>([1, 2])
+					let (otherSignal, otherSignalObserver) = Signal<Int, Never>.pipe()
 
 					var counter = 0
-					let transform = { (signal: Signal<Int, NoError>) -> (Signal<Int, NoError>) -> Signal<(Int, Int), NoError> in
+					let transform = { (signal: Signal<Int, Never>) -> (Signal<Int, Never>) -> Signal<(Int, Int), Never> in
 						return { otherSignal in
 							counter += 1
 							return Signal.zip(signal, otherSignal)
@@ -816,10 +917,10 @@ class SignalProducerSpec: QuickSpec {
 				}
 
 				it("should not miss any events") {
-					let baseProducer = SignalProducer<Int, NoError>([ 1, 2, 3 ])
-					let (otherSignal, otherSignalObserver) = Signal<Int, NoError>.pipe()
+					let baseProducer = SignalProducer<Int, Never>([ 1, 2, 3 ])
+					let (otherSignal, otherSignalObserver) = Signal<Int, Never>.pipe()
 
-					let transform = { (signal: Signal<Int, NoError>) -> (Signal<Int, NoError>) -> Signal<Int, NoError> in
+					let transform = { (signal: Signal<Int, Never>) -> (Signal<Int, Never>) -> Signal<Int, Never> in
 						return { otherSignal in
 							return Signal.zip(signal, otherSignal).map { $0.0 + $0.1 }
 						}
@@ -851,9 +952,33 @@ class SignalProducerSpec: QuickSpec {
 		}
 
 		describe("combineLatest") {
+			it("should emit the empty sentinel when no producer is given") {
+				let producer = SignalProducer<String, Never>.combineLatest(
+					EmptyCollection<SignalProducer<String, Never>>(),
+					emptySentinel: ["empty"]
+				)
+
+				var values = [[String]]()
+				var isCompleted = false
+
+				producer.start { event in
+					switch event {
+					case let .value(value):
+						values.append(value)
+					case .completed:
+						isCompleted = true
+					case .interrupted, .failed:
+						break
+					}
+				}
+
+				expect(values) == [["empty"]]
+				expect(isCompleted) == true
+			}
+
 			it("should combine the events to one array") {
-				let (producerA, observerA) = SignalProducer<Int, NoError>.pipe()
-				let (producerB, observerB) = SignalProducer<Int, NoError>.pipe()
+				let (producerA, observerA) = SignalProducer<Int, Never>.pipe()
+				let (producerB, observerB) = SignalProducer<Int, Never>.pipe()
 
 				let producer = SignalProducer.combineLatest([producerA, producerB])
 
@@ -873,7 +998,7 @@ class SignalProducerSpec: QuickSpec {
 
 			it("should start signal producers in order as defined") {
 				var ids = [Int]()
-				let createProducer = { (id: Int) -> SignalProducer<Int, NoError> in
+				let createProducer = { (id: Int) -> SignalProducer<Int, Never> in
 					return SignalProducer { observer, _ in
 						ids.append(id)
 
@@ -895,12 +1020,53 @@ class SignalProducerSpec: QuickSpec {
 				expect(ids) == [1, 2]
 				expect(values._bridgeToObjectiveC()) == [[1, 2]]._bridgeToObjectiveC()
 			}
+			
+			it("can deal with hundreds of producers") {
+				let scheduler = QueueScheduler(qos: .default, name: "RACScheduler", targeting: nil)
+				
+				let producers = (0..<700).map { _ -> SignalProducer<Void, Never> in
+					return SignalProducer(value: ())
+				}
+				
+				waitUntil { done in
+					SignalProducer
+						.combineLatest(producers)
+						.start(on: scheduler)
+						.startWithCompleted {
+							done()
+					}
+				}
+			}
 		}
 
 		describe("zip") {
+			it("should emit the empty sentinel when no producer is given") {
+				let producer = SignalProducer<String, Never>.zip(
+					EmptyCollection<SignalProducer<String, Never>>(),
+					emptySentinel: ["empty"]
+				)
+
+				var values = [[String]]()
+				var isCompleted = false
+
+				producer.start { event in
+					switch event {
+					case let .value(value):
+						values.append(value)
+					case .completed:
+						isCompleted = true
+					case .interrupted, .failed:
+						break
+					}
+				}
+
+				expect(values) == [["empty"]]
+				expect(isCompleted) == true
+			}
+
 			it("should zip the events to one array") {
-				let producerA = SignalProducer<Int, NoError>([ 1, 2 ])
-				let producerB = SignalProducer<Int, NoError>([ 3, 4 ])
+				let producerA = SignalProducer<Int, Never>([ 1, 2 ])
+				let producerB = SignalProducer<Int, Never>([ 3, 4 ])
 
 				let producer = SignalProducer.zip([producerA, producerB])
 				let result = producer.collect().single()
@@ -910,7 +1076,7 @@ class SignalProducerSpec: QuickSpec {
 
 			it("should start signal producers in order as defined") {
 				var ids = [Int]()
-				let createProducer = { (id: Int) -> SignalProducer<Int, NoError> in
+				let createProducer = { (id: Int) -> SignalProducer<Int, Never> in
 					return SignalProducer { observer, _ in
 						ids.append(id)
 
@@ -931,6 +1097,31 @@ class SignalProducerSpec: QuickSpec {
 
 				expect(ids) == [1, 2]
 				expect(values._bridgeToObjectiveC()) == [[1, 2]]._bridgeToObjectiveC()
+			}
+			
+			it("can deal with hundreds of producers") {
+				let scheduler = TestScheduler()
+				
+				let producers = (0..<1024).map { _ -> SignalProducer<UInt, Never> in
+					return SignalProducer(value: .max)
+				}
+
+				var values: [[UInt]] = []
+				var isCompleted = false
+				
+				SignalProducer
+					.zip(producers)
+					.start(on: scheduler)
+					.on(completed: { isCompleted = true }, value: { values.append($0) })
+					.start()
+
+				expect(values) == []
+				expect(isCompleted) == false
+
+				scheduler.advance()
+
+				expect(values) == [Array(repeating: .max, count: 1024)]
+				expect(isCompleted) == true
 			}
 		}
 
@@ -964,13 +1155,7 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("shouldn't overflow on a real scheduler") {
-				let scheduler: QueueScheduler
-				if #available(OSX 10.10, *) {
-					scheduler = QueueScheduler(qos: .default, name: "\(#file):\(#line)")
-				} else {
-					scheduler = QueueScheduler(queue: DispatchQueue(label: "\(#file):\(#line)"))
-				}
-
+				let scheduler = QueueScheduler.makeForTesting()
 				let producer = SignalProducer.timer(interval: .seconds(3), on: scheduler)
 				producer
 					.start()
@@ -983,7 +1168,7 @@ class SignalProducerSpec: QuickSpec {
 				var interrupted = false
 
 				var isDisposed = false
-				weak var weakSignal: Signal<Date, NoError>?
+				weak var weakSignal: Signal<Date, Never>?
 				producer.startWithSignal { signal, disposable in
 					weakSignal = signal
 					scheduler.schedule {
@@ -1006,14 +1191,14 @@ class SignalProducerSpec: QuickSpec {
 		describe("throttle while") {
 			var scheduler: ImmediateScheduler!
 			var shouldThrottle: MutableProperty<Bool>!
-			var observer: Signal<Int, NoError>.Observer!
-			var producer: SignalProducer<Int, NoError>!
+			var observer: Signal<Int, Never>.Observer!
+			var producer: SignalProducer<Int, Never>!
 
 			beforeEach {
 				scheduler = ImmediateScheduler()
 				shouldThrottle = MutableProperty(false)
 
-				let (baseSignal, baseObserver) = Signal<Int, NoError>.pipe()
+				let (baseSignal, baseObserver) = Signal<Int, Never>.pipe()
 				observer = baseObserver
 
 				producer = SignalProducer(baseSignal)
@@ -1030,6 +1215,275 @@ class SignalProducerSpec: QuickSpec {
 				shouldThrottle = nil
 
 				expect(completed) == true
+			}
+		}
+
+		describe("debounce discarding the latest value when terminated") {
+			var scheduler: TestScheduler!
+			var observer: Signal<Int, Never>.Observer!
+			var producer: SignalProducer<Int, Never>!
+
+			beforeEach {
+				scheduler = TestScheduler()
+
+				let (baseSignal, baseObserver) = Signal<Int, Never>.pipe()
+				observer = baseObserver
+
+				producer = SignalProducer(baseSignal)
+					.debounce(0.1, on: scheduler)
+
+				expect(producer).notTo(beNil())
+			}
+
+			it("should send values on the given scheduler once the interval has passed since the last value was sent") {
+				var values: [Int] = []
+				producer.startWithValues { value in
+					values.append(value)
+				}
+
+				expect(values) == []
+
+				observer.send(value: 0)
+				expect(values) == []
+
+				scheduler.advance()
+				expect(values) == []
+
+				observer.send(value: 1)
+				observer.send(value: 2)
+				expect(values) == []
+
+				scheduler.advance(by: .milliseconds(1500))
+				expect(values) == [ 2 ]
+
+				scheduler.advance(by: .seconds(3))
+				expect(values) == [ 2 ]
+
+				observer.send(value: 3)
+				expect(values) == [ 2 ]
+
+				scheduler.advance()
+				expect(values) == [ 2 ]
+
+				observer.send(value: 4)
+				observer.send(value: 5)
+				scheduler.advance()
+				expect(values) == [ 2 ]
+
+				scheduler.run()
+				expect(values) == [ 2, 5 ]
+			}
+
+			it("should schedule completion immediately") {
+				var values: [Int] = []
+				var completed = false
+
+				producer.on(event: { event in
+					switch event {
+					case let .value(value):
+						values.append(value)
+					case .completed:
+						completed = true
+					default:
+						break
+					}
+				}).start()
+
+				observer.send(value: 0)
+				scheduler.advance()
+				expect(values) == []
+
+				observer.send(value: 1)
+				observer.sendCompleted()
+				expect(completed) == false
+
+				scheduler.advance()
+				expect(values) == []
+				expect(completed) == true
+
+				scheduler.run()
+				expect(values) == []
+				expect(completed) == true
+			}
+
+			context("starting the producer twice") {
+				it("should deviver the same values") {
+					var values1: [Int] = []
+					var values2: [Int] = []
+					producer.startWithValues { value in
+						values1.append(value)
+					}
+					producer.startWithValues { value in
+						values2.append(value)
+					}
+
+					expect(values1) == []
+					expect(values2) == []
+
+					observer.send(value: 1)
+					observer.send(value: 2)
+
+					scheduler.advance(by: .milliseconds(1500))
+					expect(values1) == [ 2 ]
+					expect(values2) == [ 2 ]
+
+					observer.send(value: 3)
+					scheduler.advance(by: .milliseconds(1500))
+					expect(values1) == [ 2, 3 ]
+					expect(values2) == [ 2, 3 ]
+
+					observer.send(value: 4)
+					observer.sendCompleted()
+					scheduler.run()
+
+					expect(values1) == [ 2, 3 ]
+					expect(values2) == [ 2, 3 ]
+				}
+			}
+		}
+
+		describe("debounce without discarding the latest value when terminated") {
+			var scheduler: TestScheduler!
+			var observer: Signal<Int, Never>.Observer!
+			var producer: SignalProducer<Int, Never>!
+
+			beforeEach {
+				scheduler = TestScheduler()
+
+				let (baseSignal, baseObserver) = Signal<Int, Never>.pipe()
+				observer = baseObserver
+
+				producer = SignalProducer(baseSignal)
+					.debounce(0.1, on: scheduler, discardWhenCompleted: false)
+
+				expect(producer).notTo(beNil())
+			}
+
+			it("should send values on the given scheduler once the interval has passed since the last value was sent") {
+				var values: [Int] = []
+				producer.startWithValues { value in
+					values.append(value)
+				}
+
+				expect(values) == []
+
+				observer.send(value: 0)
+				expect(values) == []
+
+				scheduler.advance()
+				expect(values) == []
+
+				observer.send(value: 1)
+				observer.send(value: 2)
+				expect(values) == []
+
+				scheduler.advance(by: .milliseconds(1500))
+				expect(values) == [ 2 ]
+
+				scheduler.advance(by: .seconds(3))
+				expect(values) == [ 2 ]
+
+				observer.send(value: 3)
+				expect(values) == [ 2 ]
+
+				scheduler.advance()
+				expect(values) == [ 2 ]
+
+				observer.send(value: 4)
+				observer.send(value: 5)
+				scheduler.advance()
+				expect(values) == [ 2 ]
+				observer.sendCompleted()
+
+				scheduler.run()
+				expect(values) == [ 2, 5 ]
+
+			}
+
+			it("should schedule completion after sending the last value") {
+				var values: [Int] = []
+				var completed = false
+
+				producer.on(event: { event in
+					switch event {
+					case let .value(value):
+						values.append(value)
+					case .completed:
+						completed = true
+					default:
+						break
+					}
+				}).start()
+
+				observer.send(value: 0)
+				scheduler.advance()
+				expect(values) == []
+
+				observer.send(value: 1)
+				scheduler.advance()
+				observer.sendCompleted()
+				expect(completed) == false
+
+				scheduler.advance()
+				expect(values) == []
+				expect(completed) == false
+
+				scheduler.run()
+				expect(values) == [1]
+				expect(completed) == true
+			}
+
+			it("should schedule completion immediately if there is no pending value") {
+				var completed = false
+
+				producer.on(event: { event in
+					switch event {
+					case .completed:
+						completed = true
+					default:
+						break
+					}
+				}).start()
+
+				observer.sendCompleted()
+				expect(completed) == false
+				scheduler.advance()
+				expect(completed) == true
+			}
+
+			context("starting the producer twice") {
+				it("should deviver the same values") {
+					var values1: [Int] = []
+					var values2: [Int] = []
+					producer.startWithValues { value in
+						values1.append(value)
+					}
+					producer.startWithValues { value in
+						values2.append(value)
+					}
+
+					expect(values1) == []
+					expect(values2) == []
+
+					observer.send(value: 1)
+					observer.send(value: 2)
+
+					scheduler.advance(by: .milliseconds(1500))
+					expect(values1) == [ 2 ]
+					expect(values2) == [ 2 ]
+
+					observer.send(value: 3)
+					scheduler.advance(by: .milliseconds(1500))
+					expect(values1) == [ 2, 3 ]
+					expect(values2) == [ 2, 3 ]
+
+					observer.send(value: 4)
+					observer.sendCompleted()
+					scheduler.run()
+
+					expect(values1) == [ 2, 3, 4 ]
+					expect(values2) == [ 2, 3, 4 ]
+				}
 			}
 		}
 
@@ -1128,7 +1582,7 @@ class SignalProducerSpec: QuickSpec {
 				let scheduler = TestScheduler()
 				var invoked = false
 
-				let producer = SignalProducer<Int, NoError> { _, _ in
+				let producer = SignalProducer<Int, Never> { _, _ in
 					invoked = true
 				}
 
@@ -1209,6 +1663,11 @@ class SignalProducerSpec: QuickSpec {
 				expect(interrupted) == true
 				expect(disposed) == true
 			}
+
+			it("should be able to fallback to SignalProducer for contextual lookups") {
+				_ = SignalProducer<Int, TestError>.empty
+					.flatMapError { _ in .init(value: 0) }
+			}
 		}
 
 		describe("flatten") {
@@ -1221,11 +1680,11 @@ class SignalProducerSpec: QuickSpec {
 					var subsequentStarted = false
 
 					beforeEach {
-						let (outerProducer, outerObserver) = SignalProducer<SignalProducer<Int, NoError>, NoError>.pipe()
-						let (previousProducer, previousObserver) = SignalProducer<Int, NoError>.pipe()
+						let (outerProducer, outerObserver) = SignalProducer<SignalProducer<Int, Never>, Never>.pipe()
+						let (previousProducer, previousObserver) = SignalProducer<Int, Never>.pipe()
 
 						subsequentStarted = false
-						let subsequentProducer = SignalProducer<Int, NoError> { _, _ in
+						let subsequentProducer = SignalProducer<Int, Never> { _, _ in
 							subsequentStarted = true
 						}
 
@@ -1288,12 +1747,12 @@ class SignalProducerSpec: QuickSpec {
 				}
 
 				it("should not overflow the stack if inner producers complete immediately") {
-					typealias Inner = SignalProducer<(), NoError>
+					typealias Inner = SignalProducer<(), Never>
 
 					let depth = 10000
 					let inner: Inner = SignalProducer(value: ())
-					let (first, firstObserver) = SignalProducer<(), NoError>.pipe()
-					let (outer, outerObserver) = SignalProducer<Inner, NoError>.pipe()
+					let (first, firstObserver) = SignalProducer<(), Never>.pipe()
+					let (outer, outerObserver) = SignalProducer<Inner, Never>.pipe()
 
 					var value = 0
 					outer
@@ -1315,8 +1774,8 @@ class SignalProducerSpec: QuickSpec {
 					var completed = false
 
 					beforeEach {
-						let (outerProducer, outerObserver) = SignalProducer<SignalProducer<Int, NoError>, NoError>.pipe()
-						let (innerProducer, innerObserver) = SignalProducer<Int, NoError>.pipe()
+						let (outerProducer, outerObserver) = SignalProducer<SignalProducer<Int, Never>, Never>.pipe()
+						let (innerProducer, innerObserver) = SignalProducer<Int, Never>.pipe()
 
 						completeOuter = { outerObserver.sendCompleted() }
 						completeInner = { innerObserver.sendCompleted() }
@@ -1354,17 +1813,17 @@ class SignalProducerSpec: QuickSpec {
 					var completeB: (() -> Void)!
 					var sendB: (() -> Void)!
 
-					var outerObserver: Signal<SignalProducer<Int, NoError>, NoError>.Observer!
+					var outerObserver: Signal<SignalProducer<Int, Never>, Never>.Observer!
 					var outerCompleted = false
 
 					var recv = [Int]()
 
 					beforeEach {
-						let (outerProducer, _outerObserver) = SignalProducer<SignalProducer<Int, NoError>, NoError>.pipe()
+						let (outerProducer, _outerObserver) = SignalProducer<SignalProducer<Int, Never>, Never>.pipe()
 						outerObserver = _outerObserver
 
-						let (producerA, observerA) = SignalProducer<Int, NoError>.pipe()
-						let (producerB, observerB) = SignalProducer<Int, NoError>.pipe()
+						let (producerA, observerA) = SignalProducer<Int, Never>.pipe()
+						let (producerB, observerB) = SignalProducer<Int, Never>.pipe()
 
 						completeA = { observerA.sendCompleted() }
 						completeB = { observerB.sendCompleted() }
@@ -1527,7 +1986,7 @@ class SignalProducerSpec: QuickSpec {
 				}
 
 				it("should not deadlock") {
-					let producer = SignalProducer<Int, NoError>(value: 1)
+					let producer = SignalProducer<Int, Never>(value: 1)
 						.flatMap(.latest) { _ in SignalProducer(value: 10) }
 
 					let result = producer.take(first: 1).last()
@@ -1634,7 +2093,7 @@ class SignalProducerSpec: QuickSpec {
 				}
 
 				it("should not deadlock") {
-					let producer = SignalProducer<Int, NoError>(value: 1)
+					let producer = SignalProducer<Int, Never>(value: 1)
 						.flatMap(.race) { _ in SignalProducer(value: 10) }
 
 					let result = producer.take(first: 1).last()
@@ -1642,17 +2101,146 @@ class SignalProducerSpec: QuickSpec {
 				}
 			}
 
+			describe("FlattenStrategy.throttle") {
+				it("should forward values from the first and third inner producer to send an event") {
+					let (outer, outerObserver) = SignalProducer<SignalProducer<Int, TestError>, TestError>.pipe()
+					let (firstInner, firstInnerObserver) = SignalProducer<Int, TestError>.pipe()
+					let (secondInner, secondInnerObserver) = SignalProducer<Int, TestError>.pipe()
+					let (thirdInner, thirdInnerObserver) = SignalProducer<Int, TestError>.pipe()
+
+					var receivedValues: [Int] = []
+					var errored = false
+					var completed = false
+
+					outer.flatten(.throttle).start { event in
+						switch event {
+						case let .value(value):
+							receivedValues.append(value)
+						case .completed:
+							completed = true
+						case .failed:
+							errored = true
+						case .interrupted:
+							break
+						}
+					}
+
+					outerObserver.send(value: firstInner)
+					outerObserver.send(value: secondInner)
+
+					firstInnerObserver.send(value: 1)
+					secondInnerObserver.send(value: 2)
+
+					expect(receivedValues) == [ 1 ]
+					expect(errored) == false
+					expect(completed) == false
+
+					secondInnerObserver.send(value: 3)
+					secondInnerObserver.sendCompleted()
+
+					expect(receivedValues) == [ 1 ]
+					expect(errored) == false
+					expect(completed) == false
+
+					firstInnerObserver.sendCompleted()
+
+					expect(receivedValues) == [ 1 ]
+					expect(errored) == false
+					expect(completed) == false
+
+					outerObserver.send(value: thirdInner)
+					thirdInnerObserver.send(value: 4)
+
+					// NOTE:
+					// `4` will be observed because `firstInner` is completed then `thirdInner` is emitted,
+					// which is also considered as "first" producer.
+					expect(receivedValues) == [ 1, 4 ]
+					expect(errored) == false
+					expect(completed) == false
+
+					outerObserver.sendCompleted()
+
+					expect(receivedValues) == [ 1, 4 ]
+					expect(errored) == false
+					expect(completed) == false
+
+					thirdInnerObserver.sendCompleted()
+
+					expect(receivedValues) == [ 1, 4 ]
+					expect(errored) == false
+					expect(completed) == true
+				}
+
+				it("should forward an error from the first inner producer to send an error") {
+					let inner = SignalProducer<Int, TestError>(error: .default)
+					let outer = SignalProducer<SignalProducer<Int, TestError>, TestError>(value: inner)
+
+					let result = outer.flatten(.throttle).first()
+					expect(result?.error) == TestError.default
+				}
+
+				it("should forward an error from the outer producer") {
+					let outer = SignalProducer<SignalProducer<Int, TestError>, TestError>(error: .default)
+
+					let result = outer.flatten(.throttle).first()
+					expect(result?.error) == TestError.default
+				}
+
+				it("should complete when the 'outer producer' and 'first inner producer to send an event' have completed") {
+					let inner = SignalProducer<Int, TestError>.empty
+					let outer = SignalProducer<SignalProducer<Int, TestError>, TestError>(value: inner)
+
+					var completed = false
+					outer.flatten(.throttle).startWithCompleted {
+						completed = true
+					}
+
+					expect(completed) == true
+				}
+
+				it("should complete when the outer producer completes before sending any inner producers") {
+					let outer = SignalProducer<SignalProducer<Int, TestError>, TestError>.empty
+
+					var completed = false
+					outer.flatten(.throttle).startWithCompleted {
+						completed = true
+					}
+
+					expect(completed) == true
+				}
+
+				it("should not complete when the outer producer completes after sending an inner producer but it doesn't send an event") {
+					let inner = SignalProducer<Int, TestError>.never
+					let outer = SignalProducer<SignalProducer<Int, TestError>, TestError>(value: inner)
+
+					var completed = false
+					outer.flatten(.throttle).startWithCompleted {
+						completed = true
+					}
+
+					expect(completed) == false
+				}
+
+				it("should not deadlock") {
+					let producer = SignalProducer<Int, Never>(value: 1)
+						.flatMap(.throttle) { _ in SignalProducer(value: 10) }
+
+					let result = producer.take(first: 1).last()
+					expect(result?.value) == 10
+				}
+			}
+
 			describe("interruption") {
-				var innerObserver: Signal<(), NoError>.Observer!
-				var outerObserver: Signal<SignalProducer<(), NoError>, NoError>.Observer!
+				var innerObserver: Signal<(), Never>.Observer!
+				var outerObserver: Signal<SignalProducer<(), Never>, Never>.Observer!
 				var execute: ((FlattenStrategy) -> Void)!
 
 				var interrupted = false
 				var completed = false
 
 				beforeEach {
-					let (innerProducer, incomingInnerObserver) = SignalProducer<(), NoError>.pipe()
-					let (outerProducer, incomingOuterObserver) = SignalProducer<SignalProducer<(), NoError>, NoError>.pipe()
+					let (innerProducer, incomingInnerObserver) = SignalProducer<(), Never>.pipe()
+					let (outerProducer, incomingOuterObserver) = SignalProducer<SignalProducer<(), Never>, Never>.pipe()
 
 					innerObserver = incomingInnerObserver
 					outerObserver = incomingOuterObserver
@@ -1748,12 +2336,12 @@ class SignalProducerSpec: QuickSpec {
 
 				beforeEach {
 					execute = { strategy in
-						let (outerProducer, outerObserver) = SignalProducer<SignalProducer<Int, NoError>, NoError>.pipe()
+						let (outerProducer, outerObserver) = SignalProducer<SignalProducer<Int, Never>, Never>.pipe()
 
 						innerDisposable = AnyDisposable()
 						isInnerInterrupted = false
 						isInnerDisposed = false
-						let innerProducer = SignalProducer<Int, NoError> { $1.observeEnded(innerDisposable.dispose) }
+						let innerProducer = SignalProducer<Int, Never> { $1 += innerDisposable }
 							.on(interrupted: { isInnerInterrupted = true }, disposed: { isInnerDisposed = true })
 
 						interrupted = false
@@ -1881,7 +2469,7 @@ class SignalProducerSpec: QuickSpec {
 
 		describe("times") {
 			it("should start a signal N times upon completion") {
-				let original = SignalProducer<Int, NoError>([ 1, 2, 3 ])
+				let original = SignalProducer<Int, Never>([ 1, 2, 3 ])
 				let producer = original.repeat(3)
 
 				let result = producer.collect().single()
@@ -1889,7 +2477,7 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("should produce an equivalent signal producer if count is 1") {
-				let original = SignalProducer<Int, NoError>(value: 1)
+				let original = SignalProducer<Int, Never>(value: 1)
 				let producer = original.repeat(1)
 
 				let result = producer.collect().single()
@@ -1897,7 +2485,7 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("should produce an empty signal if count is 0") {
-				let original = SignalProducer<Int, NoError>(value: 1)
+				let original = SignalProducer<Int, Never>(value: 1)
 				let producer = original.repeat(0)
 
 				let result = producer.first()
@@ -1939,7 +2527,7 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("should evaluate lazily") {
-				let original = SignalProducer<Int, NoError>(value: 1)
+				let original = SignalProducer<Int, Never>(value: 1)
 				let producer = original.repeat(Int.max)
 
 				let result = producer.take(first: 1).single()
@@ -2096,10 +2684,10 @@ class SignalProducerSpec: QuickSpec {
 
 		describe("then") {
 			it("should start the subsequent producer after the completion of the original") {
-				let (original, observer) = SignalProducer<Int, NoError>.pipe()
+				let (original, observer) = SignalProducer<Int, Never>.pipe()
 
 				var subsequentStarted = false
-				let subsequent = SignalProducer<Int, NoError> { _, _ in
+				let subsequent = SignalProducer<Int, Never> { _, _ in
 					subsequentStarted = true
 				}
 
@@ -2128,10 +2716,10 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("should forward interruptions from the original producer") {
-				let (original, observer) = SignalProducer<Int, NoError>.pipe()
+				let (original, observer) = SignalProducer<Int, Never>.pipe()
 
 				var subsequentStarted = false
-				let subsequent = SignalProducer<Int, NoError> { _, _ in
+				let subsequent = SignalProducer<Int, Never> { _, _ in
 					subsequentStarted = true
 				}
 
@@ -2147,8 +2735,8 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("should complete when both inputs have completed") {
-				let (original, originalObserver) = SignalProducer<Int, NoError>.pipe()
-				let (subsequent, subsequentObserver) = SignalProducer<String, NoError>.pipe()
+				let (original, originalObserver) = SignalProducer<Int, Never>.pipe()
+				let (subsequent, subsequentObserver) = SignalProducer<String, Never>.pipe()
 
 				let producer = original.then(subsequent)
 
@@ -2164,75 +2752,93 @@ class SignalProducerSpec: QuickSpec {
 				expect(completed) == true
 			}
 
-			it("works with NoError and TestError") {
-				let producer: SignalProducer<Int, TestError> = SignalProducer<Int, NoError>.empty
+			it("works with Never and TestError") {
+				let producer: SignalProducer<Int, TestError> = SignalProducer<Int, Never>.empty
 					.then(SignalProducer<Int, TestError>.empty)
 
 				_ = producer
 			}
 
-			it("works with TestError and NoError") {
+			it("works with TestError and Never") {
 				let producer: SignalProducer<Int, TestError> = SignalProducer<Int, TestError>.empty
-					.then(SignalProducer<Int, NoError>.empty)
+					.then(SignalProducer<Int, Never>.empty)
 
 				_ = producer
 			}
 
-			it("works with NoError and NoError") {
-				let producer: SignalProducer<Int, NoError> = SignalProducer<Int, NoError>.empty
-					.then(SignalProducer<Int, NoError>.empty)
+			it("works with Never and Never") {
+				let producer: SignalProducer<Int, Never> = SignalProducer<Int, Never>.empty
+					.then(SignalProducer<Int, Never>.empty)
 
 				_ = producer
 			}
 
 			it("should not be ambiguous") {
-				let a = SignalProducer<Int, NoError>.empty.then(SignalProducer<Int, NoError>.empty)
-				expect(type(of: a)) == SignalProducer<Int, NoError>.self
+				let a = SignalProducer<Int, Never>.empty.then(SignalProducer<Int, Never>.empty)
+				expect(type(of: a)) == SignalProducer<Int, Never>.self
 
-				let b = SignalProducer<Int, NoError>.empty.then(SignalProducer<Double, NoError>.empty)
-				expect(type(of: b)) == SignalProducer<Double, NoError>.self
+				let b = SignalProducer<Int, Never>.empty.then(SignalProducer<Double, Never>.empty)
+				expect(type(of: b)) == SignalProducer<Double, Never>.self
 
-				let c = SignalProducer<Int, NoError>.empty.then(SignalProducer<Int, TestError>.empty)
+				let c = SignalProducer<Int, Never>.empty.then(SignalProducer<Int, TestError>.empty)
 				expect(type(of: c)) == SignalProducer<Int, TestError>.self
 
-				let d = SignalProducer<Int, NoError>.empty.then(SignalProducer<Double, TestError>.empty)
+				let d = SignalProducer<Int, Never>.empty.then(SignalProducer<Double, TestError>.empty)
 				expect(type(of: d)) == SignalProducer<Double, TestError>.self
 
 				let e = SignalProducer<Int, TestError>.empty.then(SignalProducer<Int, TestError>.empty)
 				expect(type(of: e)) == SignalProducer<Int, TestError>.self
 
-				let f = SignalProducer<Int, TestError>.empty.then(SignalProducer<Int, NoError>.empty)
+				let f = SignalProducer<Int, TestError>.empty.then(SignalProducer<Int, Never>.empty)
 				expect(type(of: f)) == SignalProducer<Int, TestError>.self
 
 				let g = SignalProducer<Int, TestError>.empty.then(SignalProducer<Double, TestError>.empty)
 				expect(type(of: g)) == SignalProducer<Double, TestError>.self
 
-				let h = SignalProducer<Int, TestError>.empty.then(SignalProducer<Double, NoError>.empty)
+				let h = SignalProducer<Int, TestError>.empty.then(SignalProducer<Double, Never>.empty)
 				expect(type(of: h)) == SignalProducer<Double, TestError>.self
+			}
+
+			it("should be able to fallback to SignalProducer for contextual lookups without explicit value and error type parameters, given an upstream of arbitrary error type") {
+				_ = SignalProducer<Int, TestError>.empty
+					.then(.empty)
+			}
+
+			it("should be able to fallback to SignalProducer for contextual lookups with explicit value and error type parameters, given an upstream of arbitary error type") {
+				_ = SignalProducer<Int, TestError>.empty
+					.then(.init(result: Result<String, TestError>(success: "")))
+			}
+
+			it("should be able to fallback to SignalProducer for contextual lookups without explicit error type parameter") {
+				_ = SignalProducer<Int, TestError>.empty
+					.then(.init(value: ""))
+			}
+
+			it("should be able to fallback to SignalProducer for contextual lookups without explicit value and error type parameters, given a Never upstream") {
+				_ = SignalProducer<Int, Never>.empty
+					.then(.empty)
+			}
+
+			it("should be able to fallback to SignalProducer for contextual lookups without explicit error type parameter") {
+				_ = SignalProducer<Int, Never>.empty
+					.then(.init(value: ""))
+			}
+
+			it("should be able to fallback to SignalProducer for contextual lookups with explicit value and error type parameters, given a Never upstream") {
+				_ = SignalProducer<Int, Never>.empty
+					.then(.init(result: Result<String, TestError>(success: "")))
 			}
 		}
 
 		describe("first") {
 			it("should start a signal then block on the first value") {
-				let (_signal, observer) = Signal<Int, NoError>.pipe()
+				let (_signal, observer) = Signal<Int, Never>.pipe()
 
-				let forwardingScheduler: QueueScheduler
-
-				if #available(OSX 10.10, *) {
-					forwardingScheduler = QueueScheduler(qos: .default, name: "\(#file):\(#line)")
-				} else {
-					forwardingScheduler = QueueScheduler(queue: DispatchQueue(label: "\(#file):\(#line)"))
-				}
+				let forwardingScheduler = QueueScheduler.makeForTesting()
 
 				let producer = SignalProducer(_signal.delay(0.1, on: forwardingScheduler))
 
-				let observingScheduler: QueueScheduler
-
-				if #available(OSX 10.10, *) {
-					observingScheduler = QueueScheduler(qos: .default, name: "\(#file):\(#line)")
-				} else {
-					observingScheduler = QueueScheduler(queue: DispatchQueue(label: "\(#file):\(#line)"))
-				}
+				let observingScheduler = QueueScheduler.makeForTesting()
 
 				var result: Int?
 
@@ -2247,12 +2853,12 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("should return a nil result if no values are sent before completion") {
-				let result = SignalProducer<Int, NoError>.empty.first()
+				let result = SignalProducer<Int, Never>.empty.first()
 				expect(result).to(beNil())
 			}
 
 			it("should return the first value if more than one value is sent") {
-				let result = SignalProducer<Int, NoError>([ 1, 2 ]).first()
+				let result = SignalProducer<Int, Never>([ 1, 2 ]).first()
 				expect(result?.value) == 1
 			}
 
@@ -2264,24 +2870,13 @@ class SignalProducerSpec: QuickSpec {
 
 		describe("single") {
 			it("should start a signal then block until completion") {
-				let (_signal, observer) = Signal<Int, NoError>.pipe()
-				let forwardingScheduler: QueueScheduler
+				let (_signal, observer) = Signal<Int, Never>.pipe()
 
-				if #available(OSX 10.10, *) {
-					forwardingScheduler = QueueScheduler(qos: .default, name: "\(#file):\(#line)")
-				} else {
-					forwardingScheduler = QueueScheduler(queue: DispatchQueue(label: "\(#file):\(#line)"))
-				}
+				let forwardingScheduler = QueueScheduler.makeForTesting()
 
 				let producer = SignalProducer(_signal.delay(0.1, on: forwardingScheduler))
 
-				let observingScheduler: QueueScheduler
-
-				if #available(OSX 10.10, *) {
-					observingScheduler = QueueScheduler(qos: .default, name: "\(#file):\(#line)")
-				} else {
-					observingScheduler = QueueScheduler(queue: DispatchQueue(label: "\(#file):\(#line)"))
-				}
+				let observingScheduler = QueueScheduler.makeForTesting()
 
 				var result: Int?
 
@@ -2300,12 +2895,12 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("should return a nil result if no values are sent before completion") {
-				let result = SignalProducer<Int, NoError>.empty.single()
+				let result = SignalProducer<Int, Never>.empty.single()
 				expect(result).to(beNil())
 			}
 
 			it("should return a nil result if more than one value is sent before completion") {
-				let result = SignalProducer<Int, NoError>([ 1, 2 ]).single()
+				let result = SignalProducer<Int, Never>([ 1, 2 ]).single()
 				expect(result).to(beNil())
 			}
 
@@ -2317,17 +2912,11 @@ class SignalProducerSpec: QuickSpec {
 
 		describe("last") {
 			it("should start a signal then block until completion") {
-				let (_signal, observer) = Signal<Int, NoError>.pipe()
-				let scheduler: QueueScheduler
-
-				if #available(*, OSX 10.10) {
-					scheduler = QueueScheduler(name: "\(#file):\(#line)")
-				} else {
-					scheduler = QueueScheduler(queue: DispatchQueue(label: "\(#file):\(#line)"))
-				}
+				let (_signal, observer) = Signal<Int, Never>.pipe()
+				let scheduler = QueueScheduler.makeForTesting()
 				let producer = SignalProducer(_signal.delay(0.1, on: scheduler))
 
-				var result: Result<Int, NoError>?
+				var result: Result<Int, Never>?
 
 				let group = DispatchGroup()
 
@@ -2354,12 +2943,12 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("should return a nil result if no values are sent before completion") {
-				let result = SignalProducer<Int, NoError>.empty.last()
+				let result = SignalProducer<Int, Never>.empty.last()
 				expect(result).to(beNil())
 			}
 
 			it("should return the last value if more than one value is sent") {
-				let result = SignalProducer<Int, NoError>([ 1, 2 ]).last()
+				let result = SignalProducer<Int, Never>([ 1, 2 ]).last()
 				expect(result?.value) == 2
 			}
 
@@ -2371,16 +2960,11 @@ class SignalProducerSpec: QuickSpec {
 
 		describe("wait") {
 			it("should start a signal then block until completion") {
-				let (_signal, observer) = Signal<Int, NoError>.pipe()
-				let scheduler: QueueScheduler
-				if #available(*, OSX 10.10) {
-					scheduler = QueueScheduler(name: "\(#file):\(#line)")
-				} else {
-					scheduler = QueueScheduler(queue: DispatchQueue(label: "\(#file):\(#line)"))
-				}
+				let (_signal, observer) = Signal<Int, Never>.pipe()
+				let scheduler = QueueScheduler.makeForTesting()
 				let producer = SignalProducer(_signal.delay(0.1, on: scheduler))
 
-				var result: Result<(), NoError>?
+				var result: Result<(), Never>?
 
 				let group = DispatchGroup()
 
@@ -2412,7 +2996,7 @@ class SignalProducerSpec: QuickSpec {
 		describe("observeOn") {
 			it("should immediately cancel upstream producer's work when disposed") {
 				var upstreamLifetime: Lifetime!
-				let producer = SignalProducer<(), NoError>{ _, innerLifetime in
+				let producer = SignalProducer<(), Never>{ _, innerLifetime in
 					upstreamLifetime = innerLifetime
 				}
 
@@ -2433,21 +3017,16 @@ class SignalProducerSpec: QuickSpec {
 
 		describe("take") {
 			it("Should not start concat'ed producer if the first one sends a value when using take(1)") {
-				let scheduler: QueueScheduler
-				if #available(OSX 10.10, *) {
-					scheduler = QueueScheduler(name: "\(#file):\(#line)")
-				} else {
-					scheduler = QueueScheduler(queue: DispatchQueue(label: "\(#file):\(#line)"))
-				}
+				let scheduler = QueueScheduler.makeForTesting()
 
 				// Delaying producer1 from sending a value to test whether producer2 is started in the mean-time.
-				let producer1 = SignalProducer<Int, NoError> { handler, _ in
+				let producer1 = SignalProducer<Int, Never> { handler, _ in
 					handler.send(value: 1)
 					handler.sendCompleted()
 				}.start(on: scheduler)
 
 				var started = false
-				let producer2 = SignalProducer<Int, NoError> { handler, _ in
+				let producer2 = SignalProducer<Int, Never> { handler, _ in
 					started = true
 					handler.send(value: 2)
 					handler.sendCompleted()
@@ -2566,7 +3145,7 @@ class SignalProducerSpec: QuickSpec {
 				it("starts lazily") {
 					var started = false
 
-					let producer = SignalProducer<Int, NoError>(value: 0)
+					let producer = SignalProducer<Int, Never>(value: 0)
 						.on(started: { started = true })
 					expect(started) == false
 
@@ -2581,7 +3160,7 @@ class SignalProducerSpec: QuickSpec {
 				it("shares a single subscription") {
 					var startedTimes = 0
 
-					let producer = SignalProducer<Int, NoError>.never
+					let producer = SignalProducer<Int, Never>.never
 						.on(started: { startedTimes += 1 })
 					expect(startedTimes) == 0
 
@@ -2599,7 +3178,7 @@ class SignalProducerSpec: QuickSpec {
 				it("does not start multiple times when subscribing multiple times") {
 					var startedTimes = 0
 
-					let producer = SignalProducer<Int, NoError>(value: 0)
+					let producer = SignalProducer<Int, Never>(value: 0)
 						.on(started: { startedTimes += 1 })
 
 					let replayedProducer = producer
@@ -2615,7 +3194,7 @@ class SignalProducerSpec: QuickSpec {
 				it("does not start again if it finished") {
 					var startedTimes = 0
 
-					let producer = SignalProducer<Int, NoError>.empty
+					let producer = SignalProducer<Int, Never>.empty
 						.on(started: { startedTimes += 1 })
 					expect(startedTimes) == 0
 
@@ -2635,7 +3214,7 @@ class SignalProducerSpec: QuickSpec {
 				it("does not dispose underlying subscription if the replayed producer is still in memory") {
 					var disposed = false
 
-					let producer = SignalProducer<Int, NoError>.never
+					let producer = SignalProducer<Int, Never>.never
 						.on(disposed: { disposed = true })
 
 					let replayedProducer = producer
@@ -2652,10 +3231,10 @@ class SignalProducerSpec: QuickSpec {
 				it("does not dispose if it has active subscriptions") {
 					var disposed = false
 
-					let producer = SignalProducer<Int, NoError>.never
+					let producer = SignalProducer<Int, Never>.never
 						.on(disposed: { disposed = true })
 
-					var replayedProducer = ImplicitlyUnwrappedOptional(producer.replayLazily(upTo: 1))
+					var replayedProducer = Optional(producer.replayLazily(upTo: 1))
 
 					expect(disposed) == false
 					let disposable1 = replayedProducer?.start()
@@ -2675,10 +3254,10 @@ class SignalProducerSpec: QuickSpec {
 				it("disposes underlying producer when the producer is deallocated") {
 					var disposed = false
 
-					let producer = SignalProducer<Int, NoError>.never
+					let producer = SignalProducer<Int, Never>.never
 						.on(disposed: { disposed = true })
 
-					var replayedProducer = ImplicitlyUnwrappedOptional(producer.replayLazily(upTo: 1))
+					var replayedProducer = Optional(producer.replayLazily(upTo: 1))
 
 					expect(disposed) == false
 					let disposable = replayedProducer?.start()
@@ -2706,22 +3285,28 @@ class SignalProducerSpec: QuickSpec {
 
 					var deinitValues = 0
 
-					var producer: SignalProducer<Value, NoError>! = SignalProducer(value: Value {
+					var producer: SignalProducer<Value, Never>! = SignalProducer(value: Value {
 						deinitValues += 1
 					})
 					expect(deinitValues) == 0
 
-					var replayedProducer: SignalProducer<Value, NoError>! = producer
+					var replayedProducer: SignalProducer<Value, Never>! = producer
 						.replayLazily(upTo: 1)
 
 					let disposable = replayedProducer
 						.start()
 
 					disposable.dispose()
-					expect(deinitValues) == 0
+
+					withExtendedLifetime(producer) {
+						expect(deinitValues) == 0
+					}
 
 					producer = nil
-					expect(deinitValues) == 0
+
+					withExtendedLifetime(replayedProducer) {
+						expect(deinitValues) == 0
+					}
 
 					replayedProducer = nil
 					expect(deinitValues) == 1
@@ -2731,12 +3316,12 @@ class SignalProducerSpec: QuickSpec {
 			describe("log events") {
 				it("should output the correct event") {
 					let expectations: [(String) -> Void] = [
-						{ event in expect(event) == "[] starting" },
-						{ event in expect(event) == "[] started" },
-						{ event in expect(event) == "[] value 1" },
-						{ event in expect(event) == "[] completed" },
-						{ event in expect(event) == "[] terminated" },
-						{ event in expect(event) == "[] disposed" },
+						{ event in expect(event).to(equal("[] starting")) },
+						{ event in expect(event).to(equal("[] started")) },
+						{ event in expect(event).to(equal("[] value 1")) },
+						{ event in expect(event).to(equal("[] completed")) },
+						{ event in expect(event).to(equal("[] terminated")) },
+						{ event in expect(event).to(equal("[] disposed")) },
 					]
 
 					let logger = TestLogger(expectations: expectations)
@@ -2752,13 +3337,13 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			describe("init(values) ambiguity") {
-				it("should not be a SignalProducer<SignalProducer<Int, NoError>, NoError>") {
+				it("should not be a SignalProducer<SignalProducer<Int, Never>, Never>") {
 
-					let producer1: SignalProducer<Int, NoError> = SignalProducer.empty
-					let producer2: SignalProducer<Int, NoError> = SignalProducer.empty
+					let producer1 = SignalProducer<Int, Never>.empty
+					let producer2 = SignalProducer<Int, Never>.empty
 
 					// This expression verifies at compile time that the type is as expected.
-					let _: SignalProducer<Int, NoError> = SignalProducer([producer1, producer2])
+					let _: SignalProducer<Int, Never> = SignalProducer([producer1, producer2])
 						.flatten(.merge)
 				}
 			}
@@ -2766,7 +3351,7 @@ class SignalProducerSpec: QuickSpec {
 
 		describe("take(during:)") {
 			it("completes a signal when the lifetime ends") {
-				let (signal, observer) = Signal<Int, NoError>.pipe()
+				let (signal, observer) = Signal<Int, Never>.pipe()
 				let object = MutableReference(TestObject())
 
 				let output = signal.take(during: object.value!.lifetime)
@@ -2783,7 +3368,7 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("completes a signal producer when the lifetime ends") {
-				let (producer, observer) = Signal<Int, NoError>.pipe()
+				let (producer, observer) = Signal<Int, Never>.pipe()
 				let object = MutableReference(TestObject())
 
 				let output = producer.take(during: object.value!.lifetime)
@@ -2802,7 +3387,7 @@ class SignalProducerSpec: QuickSpec {
 
 		describe("negated attribute") {
 			it("should return the negate of a value in a Boolean producer") {
-				let producer = SignalProducer<Bool, NoError> { observer, _ in
+				let producer = SignalProducer<Bool, Never> { observer, _ in
 					observer.send(value: true)
 					observer.sendCompleted()
 				}
@@ -2815,11 +3400,11 @@ class SignalProducerSpec: QuickSpec {
 
 		describe("and attribute") {
 			it("should emit true when both producers emits the same value") {
-				let producer1 = SignalProducer<Bool, NoError> { observer, _ in
+				let producer1 = SignalProducer<Bool, Never> { observer, _ in
 					observer.send(value: true)
 					observer.sendCompleted()
 				}
-				let producer2 = SignalProducer<Bool, NoError> { observer, _ in
+				let producer2 = SignalProducer<Bool, Never> { observer, _ in
 					observer.send(value: true)
 					observer.sendCompleted()
 				}
@@ -2830,11 +3415,11 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("should emit false when both producers emits opposite values") {
-				let producer1 = SignalProducer<Bool, NoError> { observer, _ in
+				let producer1 = SignalProducer<Bool, Never> { observer, _ in
 					observer.send(value: true)
 					observer.sendCompleted()
 				}
-				let producer2 = SignalProducer<Bool, NoError> { observer, _ in
+				let producer2 = SignalProducer<Bool, Never> { observer, _ in
 					observer.send(value: false)
 					observer.sendCompleted()
 				}
@@ -2845,11 +3430,11 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("should work the same way when using signal instead of a producer") {
-				let producer1 = SignalProducer<Bool, NoError> { observer, _ in
+				let producer1 = SignalProducer<Bool, Never> { observer, _ in
 					observer.send(value: true)
 					observer.sendCompleted()
 				}
-				let (signal2, observer2) = Signal<Bool, NoError>.pipe()
+				let (signal2, observer2) = Signal<Bool, Never>.pipe()
 				producer1.and(signal2).startWithValues { value in
 					expect(value).to(beTrue())
 				}
@@ -2857,15 +3442,99 @@ class SignalProducerSpec: QuickSpec {
 
 				observer2.sendCompleted()
 			}
+
+			it("should be able to fallback to SignalProducer for contextual lookups") {
+				_ = SignalProducer<Bool, Never>.empty
+					.and(.init(value: true))
+				_ = SignalProducer<Bool, Never>.and(.init(value: true))
+			}
+		}
+
+		describe("all attribute") {
+			it("should emit true when no producer is given") {
+				let producer = SignalProducer<Bool, Never>.all(
+					EmptyCollection<SignalProducer<Bool, Never>>()
+				)
+
+				var values = [Bool]()
+				var isCompleted = false
+
+				producer.start { event in
+					switch event {
+					case let .value(value):
+						values.append(value)
+					case .completed:
+						isCompleted = true
+					case .interrupted, .failed:
+						break
+					}
+				}
+
+				expect(values) == [true]
+				expect(isCompleted) == true
+			}
+
+			it("should emit true when all producers emit the same value") {
+				let producer1 = SignalProducer<Bool, Never> { observer, _ in
+					observer.send(value: true)
+					observer.sendCompleted()
+				}
+				let producer2 = SignalProducer<Bool, Never> { observer, _ in
+					observer.send(value: true)
+					observer.sendCompleted()
+				}
+				let producer3 = SignalProducer<Bool, Never> { observer, _ in
+					observer.send(value: true)
+					observer.sendCompleted()
+				}
+
+				SignalProducer.all([producer1, producer2, producer3]).startWithValues { value in
+					expect(value).to(beTrue())
+				}
+			}
+
+			it("should emit false when all producers emit opposite values") {
+				let producer1 = SignalProducer<Bool, Never> { observer, _ in
+					observer.send(value: true)
+					observer.sendCompleted()
+				}
+				let producer2 = SignalProducer<Bool, Never> { observer, _ in
+					observer.send(value: false)
+					observer.sendCompleted()
+				}
+				let producer3 = SignalProducer<Bool, Never> { observer, _ in
+					observer.send(value: false)
+					observer.sendCompleted()
+				}
+
+				SignalProducer.all([producer1, producer2, producer3]).startWithValues { value in
+					expect(value).to(beFalse())
+				}
+			}
+
+			it("should work the same way when using array of signals instead of an array of producers") {
+				let (signal1, observer1) = Signal<Bool, Never>.pipe()
+				let (signal2, observer2) = Signal<Bool, Never>.pipe()
+				let (signal3, observer3) = Signal<Bool, Never>.pipe()
+				SignalProducer.all([signal1, signal2, signal3]).startWithValues { value in
+					expect(value).to(beTrue())
+				}
+				observer1.send(value: true)
+				observer1.sendCompleted()
+				observer2.send(value: true)
+				observer2.sendCompleted()
+				observer3.send(value: true)
+				observer3.sendCompleted()
+			}
 		}
 
 		describe("or attribute") {
 			it("should emit true when at least one of the producers emits true") {
-				let producer1 = SignalProducer<Bool, NoError> { observer, _ in
+				let producer1 = SignalProducer<Bool, Never> { observer, _ in
 					observer.send(value: true)
 					observer.sendCompleted()
 				}
-				let producer2 = SignalProducer<Bool, NoError> { observer, _ in
+				let producer2 = SignalProducer<Bool, Never> { observer, _ in
 					observer.send(value: false)
 					observer.sendCompleted()
 				}
@@ -2876,11 +3545,11 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("should emit false when both producers emits false") {
-				let producer1 = SignalProducer<Bool, NoError> { observer, _ in
+				let producer1 = SignalProducer<Bool, Never> { observer, _ in
 					observer.send(value: false)
 					observer.sendCompleted()
 				}
-				let producer2 = SignalProducer<Bool, NoError> { observer, _ in
+				let producer2 = SignalProducer<Bool, Never> { observer, _ in
 					observer.send(value: false)
 					observer.sendCompleted()
 				}
@@ -2891,11 +3560,11 @@ class SignalProducerSpec: QuickSpec {
 			}
 
 			it("should work the same way when using signal instead of a producer") {
-				let producer1 = SignalProducer<Bool, NoError> { observer, _ in
+				let producer1 = SignalProducer<Bool, Never> { observer, _ in
 					observer.send(value: true)
 					observer.sendCompleted()
 				}
-				let (signal2, observer2) = Signal<Bool, NoError>.pipe()
+				let (signal2, observer2) = Signal<Bool, Never>.pipe()
 				producer1.or(signal2).startWithValues { value in
 					expect(value).to(beTrue())
 				}
@@ -2903,14 +3572,100 @@ class SignalProducerSpec: QuickSpec {
 
 				observer2.sendCompleted()
 			}
+
+			it("should be able to fallback to SignalProducer for contextual lookups") {
+				_ = SignalProducer<Bool, Never>.empty
+					.or(.init(value: true))
+				_ = SignalProducer<Bool, Never>.or(.init(value: true))
+			}
+		}
+
+		describe("any attribute") {
+			it("should emit false when no producer is given") {
+				let producer = SignalProducer<Bool, Never>.any(
+					EmptyCollection<SignalProducer<Bool, Never>>()
+				)
+
+				var values = [Bool]()
+				var isCompleted = false
+
+				producer.start { event in
+					switch event {
+					case let .value(value):
+						values.append(value)
+					case .completed:
+						isCompleted = true
+					case .interrupted, .failed:
+						break
+					}
+				}
+
+				expect(values) == [false]
+				expect(isCompleted) == true
+			}
+
+			it("should emit true when at least one of the producers in array emits true") {
+				let producer1 = SignalProducer<Bool, Never> { observer, _ in
+					observer.send(value: true)
+					observer.sendCompleted()
+				}
+				let producer2 = SignalProducer<Bool, Never> { observer, _ in
+					observer.send(value: false)
+					observer.sendCompleted()
+				}
+				let producer3 = SignalProducer<Bool, Never> { observer, _ in
+					observer.send(value: false)
+					observer.sendCompleted()
+				}
+
+				SignalProducer.any([producer1, producer2, producer3]).startWithValues { value in
+					expect(value).to(beTrue())
+				}
+			}
+			
+			it("should emit false when all producers in array emit false") {
+				let producer1 = SignalProducer<Bool, Never> { observer, _ in
+					observer.send(value: false)
+					observer.sendCompleted()
+				}
+				let producer2 = SignalProducer<Bool, Never> { observer, _ in
+					observer.send(value: false)
+					observer.sendCompleted()
+				}
+				let producer3 = SignalProducer<Bool, Never> { observer, _ in
+					observer.send(value: false)
+					observer.sendCompleted()
+				}
+
+				SignalProducer.any([producer1, producer2, producer3]).startWithValues { value in
+					expect(value).to(beFalse())
+				}
+			}
+			
+			it("should work the same way when using array of signals instead of an array of producers") {
+				let (signal1, observer1) = Signal<Bool, Never>.pipe()
+				let (signal2, observer2) = Signal<Bool, Never>.pipe()
+				let (signal3, observer3) = Signal<Bool, Never>.pipe()
+				let arrayOfSignals = [signal1, signal2, signal3]
+
+				SignalProducer.any(arrayOfSignals).startWithValues { value in
+					expect(value).to(beTrue())
+				}
+				observer1.send(value: true)
+				observer1.sendCompleted()
+				observer2.send(value: true)
+				observer2.sendCompleted()
+				observer3.send(value: true)
+				observer3.sendCompleted()
+			}
 		}
 
 		describe("promoteError") {
 			it("should infer the error type from the context") {
 				let combined: Any = SignalProducer
-					.combineLatest(SignalProducer<Int, NoError>.never.promoteError(),
+					.combineLatest(SignalProducer<Int, Never>.never.promoteError(),
 					               SignalProducer<Double, TestError>.never,
-					               SignalProducer<Float, NoError>.never.promoteError(),
+					               SignalProducer<Float, Never>.never.promoteError(),
 					               SignalProducer<UInt, POSIXError>.never.flatMapError { _ in .empty })
 
 				expect(combined is SignalProducer<(Int, Double, Float, UInt), TestError>) == true
@@ -2936,7 +3691,7 @@ extension SignalProducer {
 
 	/// Creates a producer that can be started as many times as elements in `results`.
 	/// Each signal will immediately send either a value or an error.
-	fileprivate static func attemptWithResults<C: Collection>(_ results: C) -> SignalProducer<Value, Error> where C.Iterator.Element == Result<Value, Error>, C.IndexDistance == C.Index, C.Index == Int {
+	fileprivate static func attemptWithResults<C: Collection>(_ results: C) -> SignalProducer<Value, Error> where C.Iterator.Element == Result<Value, Error> {
 		let resultCount = results.count
 		var operationIndex = 0
 

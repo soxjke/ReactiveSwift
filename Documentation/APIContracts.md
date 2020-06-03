@@ -107,7 +107,7 @@ Consequently, failures should only be used to represent “abnormal” terminati
 event describing the result might be more appropriate.
 
 If an event stream can _never_ fail, it should be parameterized with the
-special [`NoError`][NoError] type, which statically guarantees that a `failed`
+special `Never` type, which statically guarantees that a `failed`
 event cannot be sent upon the stream.
 
 #### `completion` indicates success
@@ -306,10 +306,8 @@ automatically created and passed back.
 
 Disposing of this object will
 [interrupt](#interruption-cancels-outstanding-work-and-usually-propagates-immediately)
-the produced `Signal`, thereby canceling outstanding work and sending an
-`interrupted` [event][Events] to all [observers][], and will also dispose of
-everything added to the [`CompositeDisposable`][CompositeDisposable] in
-[SignalProducer.init].
+the produced `Signal`, thereby sending an
+`interrupted` [event][Events] to all [observers][]. Anything associated with the `Lifetime` of the produced `Signal` is disposed of afterwards.
 
 Note that disposing of one produced `Signal` will not affect other signals created
 by the same `SignalProducer`.
@@ -504,16 +502,16 @@ For example:
 ```swift
 producer.start { event in
     switch event {
-    case let .Next(value):
-        print("Next event: \(value)")
+    case let .value(value):
+        print("Value event: \(value)")
 
-    case let .Failed(error):
+    case let .failed(error):
         print("Failed event: \(error)")
 
-    case .Completed:
+    case .completed:
         print("Completed event")
 
-    case .Interrupted:
+    case .interrupted:
         print("Interrupted event")
     }
 }
@@ -547,7 +545,6 @@ synchronously retrieve one or more values from a stream, like `single()` or
 [Disposables]: FrameworkOverview.md#disposables
 [Events]: FrameworkOverview.md#events
 [Framework Overview]: FrameworkOverview.md
-[NoError]: ../Sources/Errors.swift
 [Observers]: FrameworkOverview.md#observers
 [Operators]: BasicOperators.md
 [Properties]: FrameworkOverview.md#properties

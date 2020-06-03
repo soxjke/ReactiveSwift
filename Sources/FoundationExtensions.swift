@@ -7,9 +7,10 @@
 //
 
 import Foundation
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
 import Dispatch
-import enum Result.NoError
-import struct Result.AnyError
 
 #if os(Linux)
 	import let CDispatch.NSEC_PER_USEC
@@ -29,7 +30,7 @@ extension Reactive where Base: NotificationCenter {
 	///
 	/// - note: The signal does not terminate naturally. Observers must be
 	///         explicitly disposed to avoid leaks.
-	public func notifications(forName name: Notification.Name?, object: AnyObject? = nil) -> Signal<Notification, NoError> {
+	public func notifications(forName name: Notification.Name?, object: AnyObject? = nil) -> Signal<Notification, Never> {
 		return Signal { [base = self.base] observer, lifetime in
 			let notificationObserver = base.addObserver(forName: name, object: object, queue: nil) { notification in
 				observer.send(value: notification)
@@ -62,14 +63,14 @@ extension Reactive where Base: URLSession {
 	/// - note: This method will not send an error event in the case of a server
 	///         side error (i.e. when a response with status code other than
 	///         200...299 is received).
-	public func data(with request: URLRequest) -> SignalProducer<(Data, URLResponse), AnyError> {
+	public func data(with request: URLRequest) -> SignalProducer<(Data, URLResponse), Error> {
 		return SignalProducer { [base = self.base] observer, lifetime in
 			let task = base.dataTask(with: request) { data, response, error in
 				if let data = data, let response = response {
 					observer.send(value: (data, response))
 					observer.sendCompleted()
 				} else {
-					observer.send(error: AnyError(error ?? defaultSessionError))
+					observer.send(error: error ?? defaultSessionError)
 				}
 			}
 
@@ -93,10 +94,12 @@ extension DispatchTimeInterval {
 		case let .milliseconds(ms):
 			return TimeInterval(TimeInterval(ms) / 1000.0)
 		case let .microseconds(us):
-			return TimeInterval(Int64(us) * Int64(NSEC_PER_USEC)) / TimeInterval(NSEC_PER_SEC)
+			return TimeInterval(Int64(us)) * TimeInterval(NSEC_PER_USEC) / TimeInterval(NSEC_PER_SEC)
 		case let .nanoseconds(ns):
 			return TimeInterval(ns) / TimeInterval(NSEC_PER_SEC)
 		case .never:
+			return .infinity
+		@unknown default:
 			return .infinity
 		}
 	}
@@ -115,28 +118,26 @@ extension DispatchTimeInterval {
 			return .nanoseconds(-ns)
 		case .never:
 			return .never
+		@unknown default:
+			return .never
 		}
 	}
 
 	/// Scales a time interval by the given scalar specified in `rhs`.
 	///
-	/// - note: This method is only used internally to "scale down" a time 
-	///			interval. Specifically it's used only to scale intervals to 10% 
-	///			of their original value for the default `leeway` parameter in 
-	///			`Scheduler.schedule(after:action:)` schedule and similar
-	///			other methods.
-	///
-	///			If seconds is over 200,000, 10% is ~2,000, and hence we end up
-	///			with a value of ~2,000,000,000. Not quite overflowing a signed
-	///			integer on 32-bit platforms, but close.
-	///
-	///			Even still, 200,000 seconds should be a rarely (if ever)
-	///			specified interval for our APIs. And even then, folks should be
-	///			smart and specify their own `leeway` parameter.
-	///
-	/// - returns: Scaled interval in microseconds
+	/// - returns: Scaled interval in minimal appropriate unit
 	internal static func *(lhs: DispatchTimeInterval, rhs: Double) -> DispatchTimeInterval {
 		let seconds = lhs.timeInterval * rhs
-		return .microseconds(Int(seconds * 1000 * 1000))
+		var result: DispatchTimeInterval = .never
+		if let integerTimeInterval = Int(exactly: (seconds * 1000 * 1000 * 1000).rounded()) {
+			result = .nanoseconds(integerTimeInterval)
+		} else if let integerTimeInterval = Int(exactly: (seconds * 1000 * 1000).rounded()) {
+			result = .microseconds(integerTimeInterval)
+		} else if let integerTimeInterval = Int(exactly: (seconds * 1000).rounded()) {
+			result = .milliseconds(integerTimeInterval)
+		} else if let integerTimeInterval = Int(exactly: (seconds).rounded()) {
+			result = .seconds(integerTimeInterval)
+		}
+		return result
 	}
 }

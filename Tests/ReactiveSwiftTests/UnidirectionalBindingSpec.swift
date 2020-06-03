@@ -1,6 +1,5 @@
 import Dispatch
 
-import Result
 import Nimble
 import Quick
 @testable import ReactiveSwift
@@ -21,8 +20,8 @@ class UnidirectionalBindingSpec: QuickSpec {
 			}
 
 			describe("closure binding target") {
-				var target: BindingTarget<Int>!
-				var optionalTarget: BindingTarget<Int?>!
+				var target: BindingTarget<Int>?
+				var optionalTarget: BindingTarget<Int?>?
 				var value: Int?
 
 				beforeEach {
@@ -33,13 +32,13 @@ class UnidirectionalBindingSpec: QuickSpec {
 
 				describe("non-optional target") {
 					it("should pass through the lifetime") {
-						expect(target.lifetime).to(beIdenticalTo(lifetime))
+						expect(target!.lifetime).to(beIdenticalTo(lifetime))
 					}
 
 					it("should trigger the supplied setter") {
 						expect(value).to(beNil())
 
-						target.action(1)
+						target!.action(1)
 						expect(value) == 1
 					}
 
@@ -47,7 +46,7 @@ class UnidirectionalBindingSpec: QuickSpec {
 						expect(value).to(beNil())
 
 						let property = MutableProperty(1)
-						target <~ property
+						target! <~ property
 						expect(value) == 1
 
 						property.value = 2
@@ -55,16 +54,33 @@ class UnidirectionalBindingSpec: QuickSpec {
 					}
 				}
 
-				describe("optional target") {
+				describe("target of optional value") {
 					it("should pass through the lifetime") {
-						expect(optionalTarget.lifetime).to(beIdenticalTo(lifetime))
+						expect(optionalTarget!.lifetime).to(beIdenticalTo(lifetime))
 					}
 
 					it("should trigger the supplied setter") {
 						expect(value).to(beNil())
 
-						optionalTarget.action(1)
+						optionalTarget!.action(1)
 						expect(value) == 1
+					}
+
+					it("should accept bindings from properties") {
+						expect(value).to(beNil())
+
+						let property = MutableProperty(1)
+						optionalTarget! <~ property
+						expect(value) == 1
+
+						property.value = 2
+						expect(value) == 2
+					}
+				}
+
+				describe("optional LHS binding with non-nil LHS at runtime") {
+					it("should pass through the lifetime") {
+						expect(target.bindingTarget.lifetime).to(beIdenticalTo(lifetime))
 					}
 
 					it("should accept bindings from properties") {
@@ -76,6 +92,13 @@ class UnidirectionalBindingSpec: QuickSpec {
 
 						property.value = 2
 						expect(value) == 2
+					}
+				}
+
+				describe("optional LHS binding with nil LHS at runtime") {
+					it("should pass through the empty lifetime") {
+						let nilTarget: BindingTarget<Int>? = nil
+						expect(nilTarget.bindingTarget.lifetime).to(beIdenticalTo(Lifetime.empty))
 					}
 				}
 			}
@@ -159,12 +182,7 @@ class UnidirectionalBindingSpec: QuickSpec {
 				                           lifetime: lifetime,
 				                           action: setter)
 
-				let scheduler: QueueScheduler
-				if #available(OSX 10.10, *) {
-					scheduler = QueueScheduler()
-				} else {
-					scheduler = QueueScheduler(queue: DispatchQueue(label: "com.reactivecocoa.ReactiveSwift.UnidirectionalBindingSpec"))
-				}
+				let scheduler = QueueScheduler.makeForTesting()
 
 				let property = MutableProperty(1)
 				target <~ property.producer
@@ -177,6 +195,18 @@ class UnidirectionalBindingSpec: QuickSpec {
 				property.value = 2
 				expect(value).toEventually(equal(2))
 				expect(mainQueueCounter.value).toEventually(equal(2))
+			}
+
+			describe("observer binding operator") {
+				it("should forward values to observer") {
+					let targetPipe = Signal<Int?, Never>.pipe()
+					let sourcePipe = Signal<Int?, Never>.pipe()
+					let targetProperty = Property<Int?>(initial: nil, then: targetPipe.output)
+					targetPipe.input <~ sourcePipe.output
+					expect(targetProperty.value).to(beNil())
+					sourcePipe.input.send(value: 1)
+					expect(targetProperty.value).to(equal(1))
+				}
 			}
 		}
 	}

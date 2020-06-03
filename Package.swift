@@ -1,25 +1,21 @@
-import Foundation
+// swift-tools-version:5.2
 import PackageDescription
-
-var isSwiftPackagerManagerTest: Bool {
-    let environment = ProcessInfo.processInfo.environment
-    guard let value = environment["SWIFTPM_TEST_ReactiveSwift"] else { return false }
-    return NSString(string: value).boolValue
-}
 
 let package = Package(
     name: "ReactiveSwift",
-    dependencies: {
-        var deps: [Package.Dependency] = [
-            .Package(url: "https://github.com/antitypical/Result.git", versions: Version(3, 2, 1)..<Version(3, .max, .max)),
-        ]
-        if isSwiftPackagerManagerTest {
-            deps += [
-                .Package(url: "https://github.com/Quick/Quick.git", majorVersion: 1, minor: 2),
-                .Package(url: "https://github.com/Quick/Nimble.git", majorVersion: 7),
-            ]
-        }
-        return deps
-    }(),
-    swiftLanguageVersions: [3, 4]
+    platforms: [
+        .macOS(.v10_10), .iOS(.v8), .tvOS(.v9), .watchOS(.v2)
+    ],
+    products: [
+        .library(name: "ReactiveSwift", targets: ["ReactiveSwift"]),
+    ],
+    dependencies: [
+        .package(url: "https://github.com/Quick/Quick.git", from: "2.2.1"),
+        .package(url: "https://github.com/Quick/Nimble.git", from: "8.0.9"),
+    ],
+    targets: [
+        .target(name: "ReactiveSwift", dependencies: [], path: "Sources"),
+        .testTarget(name: "ReactiveSwiftTests", dependencies: ["ReactiveSwift", "Quick", "Nimble"]),
+    ],
+    swiftLanguageVersions: [.v5]
 )

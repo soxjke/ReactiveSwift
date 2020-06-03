@@ -24,7 +24,7 @@ terminal events:
  * The `failed` event indicates that an error occurred before the signal could
    finish. Events are parameterized by an `ErrorType`, which determines the kind
    of failure that’s permitted to appear in the event. If a failure is not
-   permitted, the event can use type `NoError` to prevent any from being
+   permitted, the event can use type `Never` to prevent any from being
    provided.
  * The `completed` event indicates that the signal finished successfully, and
    that no more values will be sent by the source.
@@ -164,7 +164,7 @@ The current value of a property can be obtained from the `value` getter. The
 the property’s current value, followed by all changes over time. The `signal` getter returns a [signal](#signals) that will send all changes over time, but not the initial value.
 
 The `<~` operator can be used to bind properties in different ways. Note that in
-all cases, the target has to be a binding target, represented by the [`BindingTargetProtocol`][BindingTarget]. All mutable property types, represented by the  [`MutablePropertyProtocol`][MutableProperty], are inherently binding targets.
+all cases, the target has to be a binding target, represented by the [`BindingTargetProvider`][BindingTarget]. All mutable property types, represented by the  [`MutablePropertyProtocol`][MutableProperty], are inherently binding targets.
 
 * `property <~ signal` binds a [signal](#signals) to the property, updating the
   property’s value to the latest value sent by the signal.
